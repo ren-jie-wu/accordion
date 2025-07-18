@@ -8,8 +8,8 @@ from torch_geometric.data import HeteroData
 from torch_geometric.typing import EdgeType, NodeType
 from torch_sparse import SparseTensor
 from torch.distributions import Distribution
-from coral._utils import make_key
-import coral.prob_decoders as pr
+from simba_plus._utils import make_key
+import simba_plus.prob_decoders as pr
 
 # ---------------------------------- Adoptedd from SCGLUE ----------------------------------
 
@@ -47,7 +47,6 @@ class RelationalEdgeDistributionDecoder(torch.nn.Module):
         encoded_channels: int,
         projected_channels: Optional[int] = None,
         add_covariate: bool = False,
-        IV_matrix: Optional[Tensor] = None,
         device="cpu",
         project=True,
         edgetype_specific_bias: bool = True,
@@ -62,7 +61,6 @@ class RelationalEdgeDistributionDecoder(torch.nn.Module):
             encoded_channels: Number of dimensions of latent vector that will be decoded
             projected_channels: Number of dimensions of projected latent vector onto the relation-specific space
             add_covariate: add covariate to cell node
-            IV_matrix: individual-to-variant sparse binary Tensor.
         """
         super().__init__()
         self.device = device
@@ -116,21 +114,6 @@ class RelationalEdgeDistributionDecoder(torch.nn.Module):
                     for k in range(n_cat_covs)
                 }
             )
-        if hasattr(data["cell"], "individual"):
-            assert (
-                IV_matrix is not None
-            ), "IV_matrix not provided with 'individual' attribute at cell."
-            self.n_variants = IV_matrix.shape[1]
-            self.variant_emb_locs = nn.Parameter(
-                torch.zeros((self.n_variants, projected_channels))
-            )
-            self.variant_emb_logstd = nn.Parameter(
-                torch.zeros((self.n_variants, projected_channels))
-            )
-            self.variant_emb_mask_logitp = nn.Parameter(
-                torch.ones((self.n_variants, projected_channels)) * -2
-            )
-            self.IV_matrix = IV_matrix
 
         if hasattr(data["cell"], "cont_covs"):
             # data["cell"].cont_cov.shape == (n_cont_cov, n_cells)
@@ -141,27 +124,6 @@ class RelationalEdgeDistributionDecoder(torch.nn.Module):
                     for k in range(n_cont_covs)
                 }
             )
-
-    @property
-    def variant_embs(self):
-        mask_p = nn.Sigmoid()(self.variant_emb_mask_logitp)
-        mask = torch.bernoulli(mask_p)
-        if self.training:
-            return (
-                self.variant_emb_locs
-                + torch.randn_like(self.variant_emb_logstd)
-                * torch.exp(self.variant_emb_logstd)
-            ) * mask
-        else:
-            return self.variant_emb_locs * mask_p
-
-    def get_indiv_embs(self, idx):
-        return (
-            torch.index_select(self.IV_matrix, 0, idx.cpu().long())
-            .to(self.device)
-            .float()
-            @ self.variant_embs
-        )
 
     def project(
         self, src_z: Tensor, dst_z: Tensor, src_type: NodeType, dst_type: NodeType

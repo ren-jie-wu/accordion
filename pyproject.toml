@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools >= 77.0.3"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "simba_plus"
+version = "0.1.0"
+authors = [
+  { name="Jayoung Ryu", email="jayoungkimryu@gmail.com" },
+  { name="Junxi Feng", email="junxifeng0511@gmail.com"}
+]
+dependencies = [
+  "torch_geometric", "scvi-tools", "anndata", "lightning", "scikit-learn", "scipy"
+]
+description = "SIMBA+"
+readme = "README.md"
+requires-python = ">=3.9"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Operating System :: OS Independent",
+]
+license = "MIT"
+
+
+[project.urls]
+Homepage = "https://github.com/pinellolab/simba-plus"
+Issues = "https://github.com/pinellolab/simba-plus/issues"
+
+[tool.setuptools]
+packages = ["simba_plus"]
+package-dir = {"" = "src"}

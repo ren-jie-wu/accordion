@@ -4,7 +4,7 @@ import argparse
 from tqdm import tqdm
 import anndata as ad
 import numpy as np
-from coral.model_prox import LightningProxModel
+from simba_plus.model_prox import LightningProxModel
 import torch
 from torch.utils.data import DataLoader
 import torch_geometric
@@ -14,11 +14,11 @@ from lightning.pytorch.tuner import Tuner
 from lightning.pytorch.callbacks import ModelCheckpoint, LearningRateMonitor
 from lightning.pytorch.loggers import WandbLogger
 
-import coral.load_data
-from coral.encoders import TransEncoder
-from coral.losses import HSIC
-from coral.loader import CustomIndexDataset
-from coral.utils import MyEarlyStopping, negative_sampling
+import simba_plus.load_data
+from simba_plus.encoders import TransEncoder
+from simba_plus.losses import HSIC
+from simba_plus.loader import CustomIndexDataset
+from simba_plus.utils import MyEarlyStopping, negative_sampling
 import torch.multiprocessing
 
 torch.multiprocessing.set_sharing_strategy("file_system")
@@ -36,7 +36,6 @@ def run(
     checkpoint_epoch=0,
     dont_sort=False,
     n_kl_warmup=10,
-    IV_matrix_path=None,
     project_decoder=False,
     promote_indep=False,
     hidden_dims=50,
@@ -46,32 +45,17 @@ def run(
     edgetype_specific_bias=True,
     nonneg=False,
 ):
-    run_id = f"pl_{os.path.basename(data_path).split('_HetData.dat')[0]}_{human_format(batch_size)}{'x'+str(n_batch_sampling) if n_batch_sampling > 1 else ''}{'_' + str(layers) + 'layers' if layers > 1 else ''}{'_' + os.path.basename(IV_matrix_path) if IV_matrix_path is not None else ''}_prox{'.noproj' if not project_decoder else ''}{'.indep2_' + format(hsic_lam, '1.0e') if promote_indep else ''}{'.d' + str(hidden_dims) if hidden_dims != 50 else ''}{'.enss' if not edgetype_specific_scale else ''}{'.enst' if not edgetype_specific_std else ''}{'.ensb' if not edgetype_specific_bias else ''}{'.nn' if nonneg else ''}.randinit"
+    run_id = f"pl_{os.path.basename(data_path).split('_HetData.dat')[0]}_{human_format(batch_size)}{'x'+str(n_batch_sampling) if n_batch_sampling > 1 else ''}{'_' + str(layers) + 'layers' if layers > 1 else ''}_prox{'.noproj' if not project_decoder else ''}{'.indep2_' + format(hsic_lam, '1.0e') if promote_indep else ''}{'.d' + str(hidden_dims) if hidden_dims != 50 else ''}{'.enss' if not edgetype_specific_scale else ''}{'.enst' if not edgetype_specific_std else ''}{'.ensb' if not edgetype_specific_bias else ''}{'.nn' if nonneg else ''}.randinit"
     print(f"RUN ID: {run_id}")
     prefix = f"/data/pinello/PROJECTS/2022_12_GCPA/runs/{output_dir}/"
     checkpoint_dir = f"{prefix}/{run_id}.checkpoints/"
     os.makedirs(checkpoint_dir, exist_ok=True)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using {device} as device...")
-    data = coral.load_data.load_from_path(data_path)
+    data = simba_plus.load_data.load_from_path(data_path)
     print(f"{data['cell'].x.device}: {data}")
     dim_u = hidden_dims
     num_neg_samples_fold = 10
-    if IV_matrix_path is not None:
-        IV_matrix_coo = ad.read_h5ad(IV_matrix_path).X.tocoo()
-        IV_matrix = torch.sparse_coo_tensor(
-            np.vstack((IV_matrix_coo.row, IV_matrix_coo.col)),
-            IV_matrix_coo.data,
-            torch.Size(IV_matrix_coo.shape),
-            dtype=int,
-            device="cpu",
-        )
-        del IV_matrix_coo
-        print(
-            f"@IV_Matrix size at {IV_matrix.device}: {IV_matrix.element_size() * IV_matrix._nnz() * 3}"
-        )
-    else:
-        IV_matrix = None
 
     loss_df = None
     counts_dicts = None
@@ -79,7 +63,6 @@ def run(
     edge_types = data.edge_types
     if "multiome" in data_path and "atac" not in data_path:
         edge_types = [
-            # ("peak", "has_sequence", "motif"),
             ("cell", "has_accessible", "peak"),
             ("cell", "expresses", "gene"),
         ]
@@ -136,7 +119,6 @@ def run(
                 batch[edge_type].edge_index,
                 num_nodes=(batch[src].num_nodes, batch[dst].num_nodes),
                 num_neg_samples_fold=num_neg_samples_fold,
-                # method="dense",
             )
             node_counts_dict[src][
                 batch[src].n_id[
@@ -201,7 +183,6 @@ def run(
         device=device,
         num_neg_samples_fold=num_neg_samples_fold,
         num_layers=layers,
-        IV_matrix=IV_matrix,
         project_decoder=project_decoder,
         edgetype_specific_scale=edgetype_specific_scale,
         edgetype_specific_std=edgetype_specific_std,
@@ -239,7 +220,6 @@ def run(
                 "n_kl_warmup": n_kl_warmup,
                 "n_count_nodes": n_count_nodes,
                 "early_stopping_steps": early_stopping_steps,
-                "IV_matrix_path": IV_matrix_path,
                 "promote_indep": promote_indep,
                 "HSIC_loss": hsic_lam,
                 "num_neg_samples_fold": num_neg_samples_fold,
@@ -322,7 +302,6 @@ if __name__ == "__main__":
     parser.add_argument("--batch-size", type=int, default=100_000)
     parser.add_argument("--layers", type=int, default=1)
     parser.add_argument("--output-dir", type=str, default="rna")
-    parser.add_argument("--IV-matrix-path", type=str, default=None)
     parser.add_argument("--load-checkpoint", action="store_true")
     parser.add_argument("--dont-sort", action="store_true")
     parser.add_argument("--project-decoder", action="store_true")
@@ -331,5 +310,4 @@ if __name__ == "__main__":
     parser.add_argument("--hsic-lam", type=float, default=0.1)
     parser.add_argument("--nonneg", action="store_true")
     args = parser.parse_args()
-    # with torch.autocast("cuda", dtype=torch.bfloat16):
     run(**vars(args))

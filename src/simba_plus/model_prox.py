@@ -8,20 +8,19 @@ from torch.distributions import Distribution
 from torch_geometric.data import HeteroData
 import torch.nn as nn
 from torch_geometric.typing import EdgeType, NodeType
-from coral.encoders import TransEncoder
-from coral.utils import negative_sampling
-from coral.losses import bernoulli_kl_loss
-from coral.decoders import RelationalEdgeDistributionDecoder
-from coral._utils import (
+from simba_plus.encoders import TransEncoder
+from simba_plus.utils import negative_sampling
+from simba_plus.losses import bernoulli_kl_loss
+from simba_plus.decoders import RelationalEdgeDistributionDecoder
+from simba_plus._utils import (
     add_cov_to_latent,
     make_key,
     update_lr,
 )
 
-from coral.evaluation_utils import (
+from simba_plus.evaluation_utils import (
     compute_reconstruction_gene_metrics,
     compute_classification_metrics,
-    compute_beta_metrics,
     plot_nll_distributions,
 )
 
@@ -38,7 +37,6 @@ class LightningProxModel(L.LightningModule):
         num_neg_samples_fold: int = 2,
         num_layers: int = 1,
         num_heads: int = 1,
-        IV_matrix: Optional[Tensor] = None,
         project_decoder: bool = True,
         edgetype_specific_bias: bool = True,
         edgetype_specific_scale: bool = True,
@@ -71,7 +69,6 @@ class LightningProxModel(L.LightningModule):
             data,
             n_latent_dims,
             n_latent_dims,
-            IV_matrix=IV_matrix,
             device=device,
             project=project_decoder,
             edgetype_specific_bias=edgetype_specific_bias,
