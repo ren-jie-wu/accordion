@@ -10,7 +10,7 @@ authors = [
   { name="Junxi Feng", email="junxifeng0511@gmail.com"}
 ]
 dependencies = [
-  "torch_geometric", "scvi-tools", "anndata", "lightning", "scikit-learn", "scipy"
+  "torch_geometric", "scvi-tools", "anndata", "lightning", "scikit-learn", "scipy<1.15", "matplotlib", "seaborn", "wandb"
 ]
 description = "SIMBA+"
 readme = "README.md"

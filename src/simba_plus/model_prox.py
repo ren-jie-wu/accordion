@@ -3,7 +3,6 @@ import torch
 from torch import Tensor
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 import lightning as L
-from torch_sparse import SparseTensor
 from torch.distributions import Distribution
 from torch_geometric.data import HeteroData
 import torch.nn as nn
@@ -51,6 +50,8 @@ class LightningProxModel(L.LightningModule):
         learning_rate=1e-2,
         node_weights_dict=None,
         nonneg=False,
+        reweight_rarecell: bool = False,
+        reweight_rarecell_neighbors: Optional[int] = None,
     ):
         super().__init__()
         self.save_hyperparameters()
@@ -88,6 +89,12 @@ class LightningProxModel(L.LightningModule):
         self.num_nodes_dict = {
             node_type: x.shape[0] for (node_type, x) in data.x_dict.items()
         }
+        self.reweight_rarecell = reweight_rarecell
+        if self.reweight_rarecell:
+            self.cell_weights = torch.ones(data["cell"].num_nodes, device=device)
+            if reweight_rarecell_neighbors is None:
+                reweight_rarecell_neighbors = max(20, int(data["cell"].num_nodes / 100))
+            self.reweight_rarecell_neighbors = reweight_rarecell_neighbors
         if edge_types is None:
             self.edge_types = data.edge_types
         else:
@@ -234,8 +241,8 @@ class LightningProxModel(L.LightningModule):
             else:
                 out_dict[node_type] = mu_dict[node_type]
         if self.nonneg:
-            softplus = nn.Softplus()
-            out_dict = {k: softplus(v) for k, v in out_dict.items()}
+            transf = nn.ReLU()
+            out_dict = {k: transf(v) for k, v in out_dict.items()}
         return out_dict
 
     def project(
@@ -255,15 +262,9 @@ class LightningProxModel(L.LightningModule):
         self,
         batch: HeteroData,
         z_dict: Dict[NodeType, Tensor],
-        pos_edge_index_dict: Union[
-            Dict[EdgeType, Tensor], Dict[EdgeType, SparseTensor]
-        ],
-        pos_edge_weight_dict: Union[
-            Dict[EdgeType, Tensor], Dict[EdgeType, SparseTensor]
-        ],
-        neg_edge_index_dict: Optional[
-            Union[Dict[EdgeType, Tensor], Dict[EdgeType, SparseTensor]]
-        ] = None,
+        pos_edge_index_dict: Dict[EdgeType, Tensor],
+        pos_edge_weight_dict: Dict[EdgeType, Tensor],
+        neg_edge_index_dict: Optional[Dict[EdgeType, Tensor]] = None,
         plot=False,
         get_metric=False,
     ) -> Tuple[Dict[EdgeType, Tensor], Dict[EdgeType, Tensor], Dict]:
@@ -299,6 +300,11 @@ class LightningProxModel(L.LightningModule):
                     num_neg_samples_fold=self.num_neg_samples_fold,
                     # method="dense",
                 )
+                if (neg_src_idx > batch[src_type].num_nodes).any():  # pragma: no cover
+                    raise ValueError(
+                        f"Negative sampling produced indices larger than the number of nodes in {src_type}. "
+                        f"Please check your data and the negative sampling parameters."
+                    )
                 neg_edge_index_dict[edge_type] = torch.stack([neg_src_idx, neg_dst_idx])
         neg_dist_dict: Dict[EdgeType, Tensor] = self.decoder(
             batch,
@@ -320,6 +326,9 @@ class LightningProxModel(L.LightningModule):
                 if batch[edge_type].edge_dist != "Beta"
                 else torch.tensor(1e-6, device=batch[src_type].x.device)
             )
+            if self.reweight_rarecell and src_type == "cell":
+                pos_log_probs *= self.cell_weights[batch[src_type].n_id]
+                neg_log_probs *= self.cell_weights[batch[src_type].n_id[neg_src_idx]]
             pos_loss = pos_log_probs.sum()
             neg_loss = neg_log_probs.sum()
             loss_dict[edge_type] = pos_loss + neg_loss
@@ -378,22 +387,6 @@ class LightningProxModel(L.LightningModule):
                             pos_log_probs.detach().cpu().numpy(),
                             neg_log_probs.detach().cpu().numpy(),
                             name="cell_has_peak",
-                        )
-                elif edge_type == ("peak", "has_sequence", "motif"):
-                    pass
-                else:
-                    metrics = compute_beta_metrics(
-                        pos_edge_weights.detach().cpu(),
-                        pos_dist_dict[edge_type].concentration1.detach().cpu(),
-                        pos_dist_dict[edge_type].concentration0.detach().cpu(),
-                        plot=plot,
-                    )
-                    metric_dict[edge_type] = metrics
-                    if plot:
-                        plot_nll_distributions(
-                            pos_log_probs.cpu().numpy(),
-                            neg_log_probs.cpu().numpy(),
-                            name="peak_close_to_gene",
                         )
 
         return loss_dict, neg_edge_index_dict, metric_dict
@@ -495,15 +488,9 @@ class LightningProxModel(L.LightningModule):
         self,
         batch: HeteroData,
         z_dict: Dict[NodeType, Tensor],
-        pos_edge_index_dict: Union[
-            Dict[EdgeType, Tensor], Dict[EdgeType, SparseTensor]
-        ],
-        pos_edge_weight_dict: Union[
-            Dict[EdgeType, Tensor], Dict[EdgeType, SparseTensor]
-        ],
-        neg_edge_index_dict: Optional[
-            Union[Dict[EdgeType, Tensor], Dict[EdgeType, SparseTensor]]
-        ] = None,
+        pos_edge_index_dict: Dict[EdgeType, Tensor],
+        pos_edge_weight_dict: Dict[EdgeType, Tensor],
+        neg_edge_index_dict: Optional[Dict[EdgeType, Tensor]] = None,
         # num_neg_samples_fold: Optional[int] = 1,
         edgetype_loss_weight_dict: Optional[Dict[EdgeType, float]] = None,
         plot=False,
@@ -648,6 +635,23 @@ class LightningProxModel(L.LightningModule):
 
         return loss
 
+    def mean_cell_neighbor_distance(self, k=50):
+        """
+        Calculates the mean distance between each cell node and its k nearest neighbors.
+        Returns a tensor of mean distances for each cell.
+        """
+        cell_mu = self.encoder.__mu_dict__["cell"].detach()  # (num_cells, latent_dim)
+        # Compute pairwise Euclidean distances
+        dist_matrix = torch.cdist(cell_mu, cell_mu, p=2)  # (num_cells, num_cells)
+        # Exclude self-distance by setting diagonal to infinity
+        dist_matrix.fill_diagonal_(float("inf"))
+        # Find k nearest neighbors for each cell
+        knn_distances, _ = torch.topk(dist_matrix, k, largest=False, dim=1)
+        # Mean distance to k nearest neighbors for each cell
+        mean_distances = knn_distances.mean(dim=1)
+        weights = mean_distances / mean_distances.mean()
+        return weights  # shape: (num_cells,)
+
     def on_train_epoch_start(self):
         self.validation_step_outputs = []
         if self.trainer.is_last_batch and self.hsic is not None:
@@ -660,6 +664,10 @@ class LightningProxModel(L.LightningModule):
                 "hsic_lr",
                 self.hsic_optimizer.param_groups[0]["lr"],
                 on_epoch=True,
+            )
+        if self.reweight_rarecell:
+            self.cell_weights = self.mean_cell_neighbor_distance(
+                self.reweight_rarecell_neighbors
             )
 
     def configure_optimizers(self):

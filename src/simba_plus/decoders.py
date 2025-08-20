@@ -6,7 +6,6 @@ from torch.nn import Identity, LeakyReLU
 from torch_geometric.nn import Linear
 from torch_geometric.data import HeteroData
 from torch_geometric.typing import EdgeType, NodeType
-from torch_sparse import SparseTensor
 from torch.distributions import Distribution
 from simba_plus._utils import make_key
 import simba_plus.prob_decoders as pr
@@ -140,7 +139,7 @@ class RelationalEdgeDistributionDecoder(torch.nn.Module):
         self,
         batch,
         z_dict: Dict[NodeType, Tensor],
-        edge_index_dict: Union[Dict[EdgeType, Tensor], Dict[EdgeType, SparseTensor]],
+        edge_index_dict: Dict[EdgeType, Tensor],
         scale_dict=None,
         bias_dict=None,
         std_dict=None,

@@ -1,10 +1,8 @@
 # https://pytorch-geometric.readthedocs.io/en/latest/notes/create_dataset.html
 from typing import Dict, Iterable
-from copy import deepcopy
 import numpy as np
 import torch
 from torch_geometric.data import HeteroData
-from torch_sparse import SparseTensor
 import anndata as ad
 from simba_plus.utils import _assign_node_id, _make_tensor
 
@@ -27,25 +25,6 @@ def validate_input(adata_CG, adata_CP):
 def type_attribute(data):
     for node_type in data.node_types:
         data[node_type].x = torch.tensor(data[node_type].x, dtype=torch.float)
-    return data
-
-
-def sparsify_edges(data):
-    data = deepcopy(data)
-    for edge_type, edge_index in data.edge_index_dict.items():
-        data[edge_type].edge_index = SparseTensor(
-            row=edge_index[0],
-            col=edge_index[1],
-            value=(
-                data.edge_attr_dict[edge_type]
-                if edge_type in data.edge_attr_dict
-                else None
-            ),
-            sparse_sizes=(
-                data.x_dict[edge_type[0]].shape[0],
-                data.x_dict[edge_type[-1]].shape[0],
-            ),
-        )
     return data
 
 
@@ -132,7 +111,7 @@ def make_sc_HetData(
 
 
 def load_from_path(path: str, device="cpu") -> HeteroData:
-    data = torch.load(path, map_location=device)
+    data = torch.load(path, map_location=device, weights_only=False)
     _assign_node_id(data)
     _make_tensor(data, device=device)
     return data

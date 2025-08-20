@@ -33,8 +33,7 @@ def run(
     output_dir="rna",
     data_path="../../data/atac/atac_buenrostro2018/20240808_atac_lsi_HetData.dat",
     load_checkpoint=False,
-    checkpoint_epoch=0,
-    dont_sort=False,
+    reweight_rarecell=False,
     n_kl_warmup=10,
     project_decoder=False,
     promote_indep=False,
@@ -45,7 +44,7 @@ def run(
     edgetype_specific_bias=True,
     nonneg=False,
 ):
-    run_id = f"pl_{os.path.basename(data_path).split('_HetData.dat')[0]}_{human_format(batch_size)}{'x'+str(n_batch_sampling) if n_batch_sampling > 1 else ''}{'_' + str(layers) + 'layers' if layers > 1 else ''}_prox{'.noproj' if not project_decoder else ''}{'.indep2_' + format(hsic_lam, '1.0e') if promote_indep else ''}{'.d' + str(hidden_dims) if hidden_dims != 50 else ''}{'.enss' if not edgetype_specific_scale else ''}{'.enst' if not edgetype_specific_std else ''}{'.ensb' if not edgetype_specific_bias else ''}{'.nn' if nonneg else ''}.randinit"
+    run_id = f"pl_{os.path.basename(data_path).split('_HetData.dat')[0]}_{human_format(batch_size)}{'x'+str(n_batch_sampling) if n_batch_sampling > 1 else ''}{'_' + str(layers) + 'layers' if layers > 1 else ''}_prox{'.noproj' if not project_decoder else ''}{'.rw' if reweight_rarecell else ''}{'.indep2_' + format(hsic_lam, '1.0e') if promote_indep else ''}{'.d' + str(hidden_dims) if hidden_dims != 50 else ''}{'.enss' if not edgetype_specific_scale else ''}{'.enst' if not edgetype_specific_std else ''}{'.ensb' if not edgetype_specific_bias else ''}{'.nn' if nonneg else ''}.randinit"
     print(f"RUN ID: {run_id}")
     prefix = f"/data/pinello/PROJECTS/2022_12_GCPA/runs/{output_dir}/"
     checkpoint_dir = f"{prefix}/{run_id}.checkpoints/"
@@ -303,11 +302,11 @@ if __name__ == "__main__":
     parser.add_argument("--layers", type=int, default=1)
     parser.add_argument("--output-dir", type=str, default="rna")
     parser.add_argument("--load-checkpoint", action="store_true")
-    parser.add_argument("--dont-sort", action="store_true")
     parser.add_argument("--project-decoder", action="store_true")
     parser.add_argument("--promote-indep", action="store_true")
+    parser.add_argument("--reweight-rarecell", action="store_true")
     parser.add_argument("--hidden-dims", type=int, default=50)
-    parser.add_argument("--hsic-lam", type=float, default=0.1)
+    parser.add_argument("--hsic-lam", type=float, default=0.01)
     parser.add_argument("--nonneg", action="store_true")
     args = parser.parse_args()
     run(**vars(args))
