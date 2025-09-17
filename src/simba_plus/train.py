@@ -70,7 +70,7 @@ def run(
 
     if get_adata:
         logger.info("With `--get-adata` flag, only getting adata output from the last checkpoint...")
-        save_files(run_id, cell_adata=gene_adata, peak_adata=peak_adata)
+        save_files(f"{prefix}{run_id}", cell_adata=gene_adata, peak_adata=peak_adata)
         return
 
 
@@ -299,7 +299,7 @@ def run(
         run_id=run_id,
     )
     torch.save(rpvgae.state_dict(), f"{prefix}{run_id}.model")
-    save_files(run_id, cell_adata=gene_adata, peak_adata=peak_adata)
+    save_files(f"{prefix}{run_id}", cell_adata=gene_adata, peak_adata=peak_adata)
 
 
 def human_format(num):
@@ -338,6 +338,7 @@ def save_files(run_id, cell_adata=None, peak_adata=None):
     sc.tl.umap(adata_C, random_state=2025)
     if adata_CG is not None:
         adata_C.obs["cell_type"] = adata_CG.obs["cell_type"]
+    
     adata_P = ad.AnnData(
         X=model.encoder.__mu_dict__["peak"].detach().cpu().numpy(),
         layers={
@@ -345,16 +346,18 @@ def save_files(run_id, cell_adata=None, peak_adata=None):
         },
         obs=adata_CP.var if adata_CP is not None else None,
     )
-    adata_G = ad.AnnData(
-        X=model.encoder.__mu_dict__["gene"].detach().cpu().numpy(),
-        layers={
-            "X_logstd": model.encoder.__logstd_dict__["gene"].detach().cpu().numpy()
-        },
-        obs=adata_CG.var if adata_CG is not None else None,
-    )
+    if "gene" in model.encoder.__mu_dict__:
+        adata_G = ad.AnnData(
+            X=model.encoder.__mu_dict__["gene"].detach().cpu().numpy(),
+            layers={
+                "X_logstd": model.encoder.__logstd_dict__["gene"].detach().cpu().numpy()
+            },
+            obs=adata_CG.var if adata_CG is not None else None,
+        )
+        adata_G.write(f"{run_id}.checkpoints/adata_G.h5ad")
     adata_C.write(f"{run_id}.checkpoints/adata_C.h5ad")
     adata_P.write(f"{run_id}.checkpoints/adata_P.h5ad")
-    adata_G.write(f"{run_id}.checkpoints/adata_G.h5ad")
+    
 
 
 def main(args):
