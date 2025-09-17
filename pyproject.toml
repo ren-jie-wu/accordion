@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "simba_plus"
-version = "0.1.0"
+version = "0.1.1"
 authors = [
   { name="Jayoung Ryu", email="jayoungkimryu@gmail.com" },
   { name="Junxi Feng", email="junxifeng0511@gmail.com"}
@@ -25,6 +25,9 @@ license = "MIT"
 [project.urls]
 Homepage = "https://github.com/pinellolab/simba-plus"
 Issues = "https://github.com/pinellolab/simba-plus/issues"
+
+[project.scripts]
+"simba+" = "simba_plus.simba_plus:main"
 
 [tool.setuptools]
 packages = ["simba_plus"]

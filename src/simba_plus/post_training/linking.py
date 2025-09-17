@@ -57,10 +57,11 @@ def ttest_group(
         random_scores.append(val1 * np.random.permutation(val2))
     random_score = np.vstack(random_scores).T  # n_cells x n_random_perm
     for g in group.unique():
-        res = ttest_rel(
+        res = ttest_ind(
             pos_corr_score[group == g],
             random_score[group == g, :].flatten(),
             alternative="greater",
+            equal_var=False,
         )
         # p_dict[g] = np.mean(pos_corr_score[group == g].mean() <= random_score[group == g, :].mean(axis=0))
         p_dict[g] = res.pvalue
@@ -75,11 +76,12 @@ def get_path_scores(
     adata_C: ad.AnnData,
     adata_G: ad.AnnData,
     adata_P: ad.AnnData,
+    gene: str,
+    peak: str,
     sign: Literal["-", "+"] = "+",
-    gene_idx=None,
-    peak_idx=None,
     cell_idx=None,
     return_per_cell_score: bool = False,
+    return_gene_peak_score: bool = False,
 ):
     """Get link scores between genes and peaks based on cell data.
     Args:
@@ -88,6 +90,12 @@ def get_path_scores(
                         adata_P: AnnData object containing peak data.
         Returns:
                         DataFrame containing link scores between genes and peaks."""
+    gene_idx = np.where(adata_G.obs_names == gene)[0]
+    if len(gene_idx) == 0:
+        raise ValueError(f"{gene} not in adata_G.obs_names")
+    peak_idx = np.where(adata_P.obs_names == peak)[0]
+    if len(peak_idx) == 0:
+        raise ValueError(f"{peak} not in adata_P.obs_names")
     for adata in [adata_C, adata_G, adata_P]:
         if "X_normed" not in adata.layers:
             adata.layers["X_normed"] = (
@@ -106,6 +114,12 @@ def get_path_scores(
     scores = _softmax_gene_score[gene_idx, :] * softmax_peak_score[peak_idx, :]
     if cell_idx is not None:
         scores = scores[:, cell_idx]
+    if return_gene_peak_score:
+        return (
+            scores.squeeze(),
+            _softmax_gene_score[gene_idx, :].squeeze(),
+            softmax_peak_score[peak_idx, :].squeeze(),
+        )
     if return_per_cell_score:
         return scores.mean(axis=1), scores
     return scores.mean(axis=1)
@@ -120,6 +134,7 @@ def get_active_cell_state(
     signs,
     celltype_annot: str = "azimuth_celltype",
     return_p: bool = False,
+    n_random_perm: int = 10,
 ):
     """Get active cell state based on gene and peak scores.
     Args:
@@ -156,9 +171,10 @@ def get_active_cell_state(
         else:
             _softmax_gene_score = softmax_gene_score
         pos_corr_score, random_score, sigs, lfcs = ttest_group(
-            softmax_peak_score[pidx, :],
             _softmax_gene_score[gidx, :],
+            softmax_peak_score[pidx, :],
             adata_C.obs[celltype_annot],
+            n_random_perm=n_random_perm,
         )
         pos_corr_scores.append(pos_corr_score)
         random_scores.append(random_score)
@@ -168,10 +184,16 @@ def get_active_cell_state(
         cts = np.array(cts)[np.array([-lfcs[k] for k in cts]).argsort()]
         ctss.append(cts)
     if return_p:
-        return pos_corr_scores, random_scores, sigslist, lfcslist
+        return (
+            np.hstack(pos_corr_scores),
+            np.vstack(random_scores),
+            sigslist,
+            lfcslist,
+            ctss,
+        )
 
     return (
-        [p.mean() for p in pos_corr_scores],
-        [r.mean(axis=0) for r in random_scores],
+        np.hstack([p.mean() for p in pos_corr_scores]),
+        np.vstack([r.mean(axis=0) for r in random_scores]),
         ctss,
     )
