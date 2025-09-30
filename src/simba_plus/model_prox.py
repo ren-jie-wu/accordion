@@ -52,6 +52,7 @@ class LightningProxModel(L.LightningModule):
         nonneg=False,
         reweight_rarecell: bool = False,
         reweight_rarecell_neighbors: Optional[int] = None,
+        positive_scale: bool = False,
     ):
         super().__init__()
         self.save_hyperparameters()
@@ -75,6 +76,7 @@ class LightningProxModel(L.LightningModule):
             edgetype_specific_bias=edgetype_specific_bias,
             edgetype_specific_scale=edgetype_specific_scale,
             edgetype_specific_std=edgetype_specific_std,
+            positive_scale=positive_scale,
         )
         self.hsic = hsic
         if self.hsic is not None:

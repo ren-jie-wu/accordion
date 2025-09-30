@@ -48,6 +48,7 @@ def run(
     gene_adata=None,
     peak_adata=None,
     get_adata: str = False,
+    pos_scale: bool = False,
 ):
     """Train the model with the given parameters.
     If get_adata is True, it will only load the gene/peak/cell AnnData object from the checkpoint.
@@ -56,7 +57,7 @@ def run(
 
     """
     print(f"batch size: {batch_size}")
-    run_id = f"pl_{os.path.basename(data_path).split('_HetData.dat')[0]}_{human_format(batch_size)}{'x'+str(n_batch_sampling) if n_batch_sampling > 1 else ''}{'_' + str(layers) + 'layers' if layers > 1 else ''}_prox{'.noproj' if not project_decoder else ''}{'.rw' if reweight_rarecell else ''}{'.indep2_' + format(hsic_lam, '1.0e') if promote_indep else ''}{'.d' + str(hidden_dims) if hidden_dims != 50 else ''}{'.enss' if not edgetype_specific_scale else ''}{'.enst' if not edgetype_specific_std else ''}{'.ensb' if not edgetype_specific_bias else ''}{'.nn' if nonneg else ''}.randinit"
+    run_id = f"pl_{os.path.basename(data_path).split('_HetData.dat')[0]}_{human_format(batch_size)}{'x'+str(n_batch_sampling) if n_batch_sampling > 1 else ''}{'_' + str(layers) + 'layers' if layers > 1 else ''}_prox{'.noproj' if not project_decoder else ''}{'.rw' if reweight_rarecell else ''}{'.indep2_' + format(hsic_lam, '1.0e') if promote_indep else ''}{'.d' + str(hidden_dims) if hidden_dims != 50 else ''}{'.enss' if not edgetype_specific_scale else ''}{'.enst' if not edgetype_specific_std else ''}{'.ensb' if not edgetype_specific_bias else ''}{'.nn' if nonneg else ''}{'.ps' if pos_scale else ''}.randinit"
     print(f"RUN ID: {run_id}")
     prefix = f"/data/pinello/PROJECTS/2022_12_GCPA/runs/{output_dir}/"
     checkpoint_dir = f"{prefix}/{run_id}.checkpoints/"
@@ -212,6 +213,7 @@ def run(
         val_nll_scale=val_nll_scale,
         node_weights_dict=node_weights_dict,
         nonneg=nonneg,
+        positive_scale=pos_scale,
     ).to(device)
 
     def train(
@@ -380,6 +382,7 @@ def add_argument(parser):
     parser.add_argument("--hsic-lam", type=float, default=0.01)
     parser.add_argument("--nonneg", action="store_true")
     parser.add_argument("--get-adata", action="store_true")
+    parser.add_argument("--pos-scale", action="store_true")
     return parser
 
 if __name__ == "__main__":
