@@ -141,19 +141,6 @@ def add_argument(parser):
     return parser
 
 
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser = add_argument(parser)
-    args = parser.parse_args()
-
-    dat = make_sc_HetData(
-        adata_CG=ad.read_h5ad(args.gene_adata) if args.gene_adata else None,
-        adata_CP=ad.read_h5ad(args.peak_adata) if args.peak_adata else None,
-        cell_cat_cov=args.batch_col,
-    )
-    torch.save(dat, args.out_path)
-
-
 def main(args):
     dat = make_sc_HetData(
         adata_CG=ad.read_h5ad(args.gene_adata) if args.gene_adata else None,
@@ -161,3 +148,10 @@ def main(args):
         cell_cat_cov=args.batch_col,
     )
     torch.save(dat, args.out_path)
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser = add_argument(parser)
+    args = parser.parse_args()
+    main(args)
