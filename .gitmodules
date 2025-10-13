@@ -1,0 +1,3 @@
+[submodule "src/ldsc"]
+	path = src/ldsc
+	url = git@github.com:jykr/ldsc-sparse.git

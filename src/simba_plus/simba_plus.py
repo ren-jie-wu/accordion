@@ -6,6 +6,8 @@ import os
 import argparse
 import simba_plus.load_data as load_data
 import simba_plus.train as train
+import simba_plus.evaluate as evaluate
+import simba_plus.heritability.create_report as create_heritability_report
 import logging
 
 logger = logging.getLogger(__name__)
@@ -22,35 +24,19 @@ def main():
     )
     subparsers = parser.add_subparsers(dest="subcommand", required=True)
 
-    # load_data subcommand
-    load_data_parser = subparsers.add_parser("load_data", help="Load data")
-    load_data_parser.add_argument(
-        "--gene-adata",
-        type=str,
-        help="Path to the cell by gene AnnData file (e.g., .h5ad).",
+    load_data_parser = subparsers.add_parser(
+        "load_data",
     )
-    load_data_parser.add_argument(
-        "--peak-adata",
-        type=str,
-        help="Path to the cell by gene AnnData file (e.g., .h5ad).",
-    )
-    load_data_parser.add_argument(
-        "--batch-col",
-        type=str,
-        help="Batch column in AnnData.obs of gene AnnData. If gene AnnData is not provided, peak AnnData will be used.",
-    )
-    load_data_parser.add_argument(
-        "out_path",
-        type=str,
-        default=".",
-        help="Path to the saved HeteroData object (e.g., .pt file).",
-    )
+    load_data_parser = load_data.add_argument(load_data_parser)
 
-    # train subcommand
-    train_parser = subparsers.add_parser("train", help="Train model")
+    train_parser = subparsers.add_parser("train")
     train_parser = train.add_argument(train_parser)
 
-    # load_data_parser = subparsers.add_parser("load_data", help="Load data")
+    eval_parser = subparsers.add_parser("eval")
+    eval_parser = evaluate.add_argument(eval_parser)
+
+    heritability_parser = subparsers.add_parser("heritability")
+    heritability_parser = create_heritability_report.add_argument(heritability_parser)
 
     parsed_args = parser.parse_args()
     subcommand = parsed_args.subcommand
@@ -59,6 +45,10 @@ def main():
         load_data.main(parsed_args)
     elif subcommand == "train":
         train.main(parsed_args)
+    elif subcommand == "eval":
+        evaluate.main(parsed_args)
+    elif subcommand == "heritability":
+        create_heritability_report.main(parsed_args)
 
 
 if __name__ == "__main__":

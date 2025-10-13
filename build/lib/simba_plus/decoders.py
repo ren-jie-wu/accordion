@@ -34,7 +34,6 @@ register_prob_model("Poisson", pr.PoissonDataDecoder)
 register_prob_model("Bernoulli", pr.BernoulliDataDecoder)
 register_prob_model("Beta", pr.BetaDataDecoder)
 register_prob_model("NegativeBinomial", pr.NegativeBinomialDataDecoder)
-register_prob_model("Gamma", pr.GammaDataDecoder)
 
 
 # ----------------------------------------------------------------------------------------------------
@@ -52,7 +51,6 @@ class RelationalEdgeDistributionDecoder(torch.nn.Module):
         edgetype_specific_bias: bool = True,
         edgetype_specific_scale: bool = True,
         edgetype_specific_std: bool = True,
-        positive_scale: bool = False,
     ) -> None:
         """Initialize the decoder with shared projection matrix per relation type.
         See https://pytorch-geometric.readthedocs.io/en/latest/_modules/torch_geometric/nn/conv/hgt_conv.html#HGTConv
@@ -71,15 +69,33 @@ class RelationalEdgeDistributionDecoder(torch.nn.Module):
         self.edgetype_specific_scale = edgetype_specific_scale
         self.edgetype_specific_std = edgetype_specific_std
         self.prob_dict = torch.nn.ModuleDict()
+        if project:
+            self.proj_dict = torch.nn.ModuleDict()
+            for node_type in data.node_types:
+                if node_type == "cell" and add_covariate:
+                    self.proj_dict[node_type] = Linear(
+                        encoded_channels,  # + count_additional_latent_dims_for_covs(data),
+                        projected_channels,
+                    )
+                elif node_type == "cell":
+                    self.proj_dict[node_type] = Identity()
+                else:
+                    self.proj_dict[node_type] = torch.nn.Sequential(
+                        Linear(
+                            encoded_channels,
+                            projected_channels,
+                        ),
+                        LeakyReLU(),
+                    )
         # import pdb; pdb.set_trace()
         for edge_type in data.edge_types:
             if edge_type in data.edge_dist_dict.keys():
                 self.prob_dict[",".join(edge_type)] = _DECODER_MAP[
                     data.edge_dist_dict[edge_type]
                 ](
-                    projected_channels,
-                    positive_scale=positive_scale,
-                )
+                    projected_channels
+                )  # TODO: add attribute setting in graph construction step. What if the distribution decoder has external parameter to be specified?
+                # ModuleDict only takes string as its key.
         self.add_covariate = add_covariate
         if hasattr(data["cell"], "cat_covs"):
             # data["cell"].cat_cov.shape == (n_cat_cov, n_cells)

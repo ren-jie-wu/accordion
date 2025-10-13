@@ -1,0 +1,57 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: true
+          fetch-depth: 0
+
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.13'
+
+      - name: Install build / test dependencies
+        run: |
+          python -m pip install --upgrade pip setuptools wheel
+          pip install -e .
+          pip install pytest
+
+      - name: Run tests
+        run: pytest -q
+
+      - name: Run CLI doc generator
+        env:
+          PYTHONPATH: ${{ github.workspace }}/src
+        run: |
+          python scripts/update_cli_docs.py
+
+      - name: Generate API docs (pdoc)
+        env:
+          PYTHONPATH: ${{ github.workspace }}/src
+        run: |
+          # output HTML into docs/api (overwrite)
+          python -m pdoc --output-dir docs/api --force simba_plus
+          
+      - name: Commit and push docs if changed
+        env:
+          GIT_AUTHOR_NAME: "github-actions[bot]"
+          GIT_AUTHOR_EMAIL: "github-actions[bot]@users.noreply.github.com"
+        run: |
+          git config user.name "${GIT_AUTHOR_NAME}"
+          git config user.email "${GIT_AUTHOR_EMAIL}"
+          git add docs/CLI.md || true
+          if ! git diff --cached --quiet; then
+            git commit -m "chore(docs): update CLI help output"
+            git push
+          else
+            echo "No CLI doc changes"
+          fi

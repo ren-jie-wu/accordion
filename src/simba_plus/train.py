@@ -1,6 +1,7 @@
 import os
 from itertools import chain
 import argparse
+import pickle as pkl
 from tqdm import tqdm
 import anndata as ad
 import numpy as np
@@ -75,7 +76,6 @@ def run(
         save_files(f"{prefix}{run_id}", cell_adata=adata_CG, peak_adata=adata_CP)
         return
 
-
     loss_df = None
     counts_dicts = None
 
@@ -88,6 +88,7 @@ def run(
 
     train_data_dict = {}
     val_data_dict = {}
+    test_data_dict = {}
 
     torch.manual_seed(2025)
     for edge_type in edge_types:
@@ -100,11 +101,11 @@ def run(
         selected_indices = set()
 
         indices = torch.arange(num_edges)[torch.randperm(num_edges)]
-        print("Selecting source node")
-        selected_indices.update(np.unique(src_nodes[indices].cpu().numpy(), return_index=True)[1].tolist())
-        print("Selecting destination node")
-        selected_indices.update(np.unique(dst_nodes[indices].cpu().numpy(), return_index=True)[1].tolist())
-        print("Selected indices")
+        # print("Selecting source node")
+        # selected_indices.update(np.unique(src_nodes[indices].cpu().numpy(), return_index=True)[1].tolist())
+        # print("Selecting destination node")
+        # selected_indices.update(np.unique(dst_nodes[indices].cpu().numpy(), return_index=True)[1].tolist())
+        # print("Selected indices")
 
         # Fill up to 90% for train, 5% for val
         remaining_indices = [i for i in indices.cpu().numpy() if i not in selected_indices]
@@ -114,9 +115,11 @@ def run(
         selected_indices = list(selected_indices)
         train_index = torch.tensor(selected_indices + remaining_indices[:train_size - len(selected_indices)])
         val_index = torch.tensor(remaining_indices[(train_size - len(selected_indices)):(train_size - len(selected_indices) + val_size)])
+        test_index = torch.tensor(remaining_indices[(train_size - len(selected_indices) + val_size):])
 
         train_data_dict[edge_type] = CustomIndexDataset(edge_type, train_index)
         val_data_dict[edge_type] = CustomIndexDataset(edge_type, val_index)
+        test_data_dict[edge_type] = CustomIndexDataset(edge_type, test_index)
 
     def collate(data):
         types, idxs = zip(*data)
@@ -166,24 +169,6 @@ def run(
                 edge_type = tuple(edge_type)
                 batch = data.edge_subgraph({edge_type: label_index}).to(device)
                 src, _, dst = edge_type
-                (
-                    neg_src_idx,
-                    neg_dst_idx,
-                ) = negative_sampling(
-                    batch[edge_type].edge_index,
-                    num_nodes=(batch[src].num_nodes, batch[dst].num_nodes),
-                    num_neg_samples_fold=num_neg_samples_fold,
-                )
-                node_counts_dict[src][
-                    batch[src].n_id[
-                        torch.cat([batch[edge_type].edge_index[0], neg_src_idx])
-                    ]
-                ] += 1
-                node_counts_dict[dst][
-                    batch[dst].n_id[
-                        torch.cat([batch[edge_type].edge_index[1], neg_dst_idx])
-                    ]
-                ] += 1
 
         node_weights_dict = {k: 1.0 / v for k, v in node_counts_dict.items()}
         torch.save(node_weights_dict, node_weights_path)
@@ -231,6 +216,9 @@ def run(
         hsic = None
     train_edge_index_dict = {"__".join(edge_type):train_data_dict[edge_type].index for edge_type in edge_types}
     val_edge_index_dict = {"__".join(edge_type):val_data_dict[edge_type].index for edge_type in edge_types}
+    test_edge_index_dict = {"__".join(edge_type):test_data_dict[edge_type].index for edge_type in edge_types}
+    with open(f"{checkpoint_dir}/data_idx0.pkl", "wb") as f:
+        pkl.dump({"val":val_edge_index_dict, "test":test_edge_index_dict}, f)
     rpvgae = LightningProxModel(
         data,
         encoder_class=TransEncoder,
@@ -359,39 +347,40 @@ def save_files(run_id, cell_adata=None, peak_adata=None):
     model = LightningProxModel.load_from_checkpoint(
         f"{run_id}.checkpoints/last.ckpt", weights_only=True, map_location="cpu"
     )
-    np.save(
-        f"{run_id}.checkpoints/peak_scale.npy",
-        model.scale_dict["peak__cell_has_accessible_peak"].detach().numpy(),
-    )
-    np.save(
-        f"{run_id}.checkpoints/peak_bias.npy",
-        model.bias_dict["peak__cell_has_accessible_peak"].detach().numpy(),
-    )
-    np.save(
-        f"{run_id}.checkpoints/gene_scale.npy",
-        model.scale_dict["gene__cell_expresses_gene"].detach().numpy(),
-    )
-    np.save(
-        f"{run_id}.checkpoints/gene_bias.npy",
-        model.bias_dict["gene__cell_expresses_gene"].detach().numpy(),
-    )
-
-    np.save(
+    if "peak" in model.encoder.__mu_dict__:
+        np.save(
+            f"{run_id}.checkpoints/peak_scale.npy",
+            model.scale_dict["peak__cell_has_accessible_peak"].detach().numpy(),
+        )
+        np.save(
+            f"{run_id}.checkpoints/peak_bias.npy",
+            model.bias_dict["peak__cell_has_accessible_peak"].detach().numpy(),
+        )
+        np.save(
         f"{run_id}.checkpoints/cell_peak_scale.npy",
         model.scale_dict["cell__cell_has_accessible_peak"].detach().numpy(),
     )
-    np.save(
-        f"{run_id}.checkpoints/cell_peak_bias.npy",
-        model.bias_dict["cell__cell_has_accessible_peak"].detach().numpy(),
-    )
-    np.save(
-        f"{run_id}.checkpoints/cell_gene_scale.npy",
-        model.scale_dict["cell__cell_expresses_gene"].detach().numpy(),
-    )
-    np.save(
-        f"{run_id}.checkpoints/cell_gene_bias.npy",
-        model.bias_dict["cell__cell_expresses_gene"].detach().numpy(),
-    )
+        np.save(
+            f"{run_id}.checkpoints/cell_peak_bias.npy",
+            model.bias_dict["cell__cell_has_accessible_peak"].detach().numpy(),
+        )
+    if "gene" in model.encoder.__mu_dict__:
+        np.save(
+            f"{run_id}.checkpoints/gene_scale.npy",
+            model.scale_dict["gene__cell_expresses_gene"].detach().numpy(),
+        )
+        np.save(
+            f"{run_id}.checkpoints/gene_bias.npy",
+            model.bias_dict["gene__cell_expresses_gene"].detach().numpy(),
+        )
+        np.save(
+            f"{run_id}.checkpoints/cell_gene_scale.npy",
+            model.scale_dict["cell__cell_expresses_gene"].detach().numpy(),
+        )
+        np.save(
+            f"{run_id}.checkpoints/cell_gene_bias.npy",
+            model.bias_dict["cell__cell_expresses_gene"].detach().numpy(),
+        )
     cell_x = model.encoder.__mu_dict__["cell"].detach().cpu()
     obs_use = None
     if adata_CG is not None:
@@ -436,6 +425,7 @@ def main(args):
     run(**kwargs)
 
 def add_argument(parser):
+    parser.description = "Train SIMBA+ model on the given HetData object."
     parser.add_argument("data_path", help="Path to the input data file (HetData.dat or similar)")
     parser.add_argument("--adata-CG", type=str, default=None, help="Path to gene AnnData (.h5ad) file for fetching cell/gene metadata. Output adata_G.h5ad will have no .obs attribute if not provided.")
     parser.add_argument("--adata-CP", type=str, default=None, help="Path to peak/ATAC AnnData (.h5ad) file for fetching cell/peak metadata. Output adata_G.h5ad will have no .obs attribute if not provided.")

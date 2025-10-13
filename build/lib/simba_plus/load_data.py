@@ -116,8 +116,10 @@ def load_from_path(path: str, device="cpu") -> HeteroData:
     return data
 
 
-def add_argument(parser):
-    parser.description = "Load a HeteroData object from a given path and move it to the specified device."
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(
+        description="Load a HeteroData object from a given path and move it to the specified device."
+    )
     parser.add_argument(
         "--gene-adata",
         type=str,
@@ -138,12 +140,6 @@ def add_argument(parser):
         type=str,
         help="Path to the saved HeteroData object (e.g., .pt file).",
     )
-    return parser
-
-
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser = add_argument(parser)
     args = parser.parse_args()
 
     dat = make_sc_HetData(

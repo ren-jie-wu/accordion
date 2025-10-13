@@ -8,8 +8,4 @@ pip install .
 ```
 
 ## Usage
-`simba+` binary entrypoint is in `src/simba_plus/simba_plus.py`.
-```
-simba+ load_data ...
-simba+ train ...
-```
+See [CLI interface](docs/CLI.md) for running SIMBA+ on AnnData input.
