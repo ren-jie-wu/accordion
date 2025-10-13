@@ -1,0 +1,14 @@
+title: "SIMBA+"
+description: "API reference and documentation for SIMBA+"
+
+theme: just-the-docs
+plugins:
+  - jekyll-feed
+
+markdown: kramdown
+kramdown:
+  input: GFM
+
+# Ensure the generated API HTML is included in the site build
+include:
+  - api
