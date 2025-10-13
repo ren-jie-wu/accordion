@@ -20,6 +20,6 @@ except Exception:
 
 # generate into docs/api
 out_dir = os.path.join(REPO_ROOT, "docs", "api")
-cmd = [sys.executable, "-m", "pdoc", "--output-dir", out_dir, "--force", "simba_plus"]
+cmd = [sys.executable, "-m", "pdoc", "--output-dir", out_dir, "simba_plus"]
 subprocess.check_call(cmd)
 print("Wrote API docs to", out_dir)
