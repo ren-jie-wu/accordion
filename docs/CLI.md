@@ -1,6 +1,6 @@
 # CLI reference
 
-Generated: 2025-10-13T02:51:36.860396Z
+Generated: 2025-10-13T03:13:33.318987Z
 
 Run `python -m simba_plus.simba_plus <subcommand> -h` for usage examples.
 
