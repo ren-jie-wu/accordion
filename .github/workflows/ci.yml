@@ -39,7 +39,7 @@ jobs:
           PYTHONPATH: ${{ github.workspace }}/src
         run: |
           # output HTML into docs/api (overwrite)
-          python -m pdoc --output-dir docs/api --force simba_plus
+          python -m pdoc --output-dir docs/api simba_plus
 
       - name: Commit and push docs if changed
         env:
