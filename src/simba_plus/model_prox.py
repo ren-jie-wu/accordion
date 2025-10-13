@@ -102,7 +102,10 @@ class LightningProxModel(L.LightningModule):
             ).to(device)
             train_val_idx = {}
             for k in train_data_dict.keys():
-                train_val_idx[k] = torch.cat([train_data_dict[k], val_data_dict[k]])
+                if val_data_dict is not None:
+                    train_val_idx[k] = torch.cat([train_data_dict[k], val_data_dict[k]])
+                else:
+                    train_val_idx[k] = train_data_dict[k]
             self.train_val_data = self.data.edge_subgraph(
                 {tuple(k.split("__")): v for k, v in train_val_idx.items()}
             ).to(device)

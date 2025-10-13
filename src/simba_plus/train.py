@@ -101,11 +101,11 @@ def run(
         selected_indices = set()
 
         indices = torch.arange(num_edges)[torch.randperm(num_edges)]
-        # print("Selecting source node")
-        # selected_indices.update(np.unique(src_nodes[indices].cpu().numpy(), return_index=True)[1].tolist())
-        # print("Selecting destination node")
-        # selected_indices.update(np.unique(dst_nodes[indices].cpu().numpy(), return_index=True)[1].tolist())
-        # print("Selected indices")
+        print("Selecting source node")
+        selected_indices.update(np.unique(src_nodes[indices].cpu().numpy(), return_index=True)[1].tolist())
+        print("Selecting destination node")
+        selected_indices.update(np.unique(dst_nodes[indices].cpu().numpy(), return_index=True)[1].tolist())
+        print("Selected indices")
 
         # Fill up to 90% for train, 5% for val
         remaining_indices = [i for i in indices.cpu().numpy() if i not in selected_indices]
@@ -217,8 +217,9 @@ def run(
     train_edge_index_dict = {"__".join(edge_type):train_data_dict[edge_type].index for edge_type in edge_types}
     val_edge_index_dict = {"__".join(edge_type):val_data_dict[edge_type].index for edge_type in edge_types}
     test_edge_index_dict = {"__".join(edge_type):test_data_dict[edge_type].index for edge_type in edge_types}
-    with open(f"{checkpoint_dir}/data_idx0.pkl", "wb") as f:
+    with open(f"{checkpoint_dir}/data_idx.pkl", "wb") as f:
         pkl.dump({"val":val_edge_index_dict, "test":test_edge_index_dict}, f)
+    
     rpvgae = LightningProxModel(
         data,
         encoder_class=TransEncoder,

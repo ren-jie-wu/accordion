@@ -58,7 +58,7 @@ def decode(
             neg_src_idx,
             neg_dst_idx,
         ) = negative_sampling(
-            train_index,
+            train_index[edge_type],
             num_nodes=(
                 batch[src_type].num_nodes,
                 batch[dst_type].num_nodes,
@@ -84,22 +84,29 @@ def get_gexp_metrics(
     train_index: torch_geometric.data.Data,
     batch_size: Optional[int] = None,
     n_negative_samples: Optional[int] = None,
+    device: str = "cpu",
 ):
     if batch_size is None:
         batch_size = int(1e6)
-    gexp_mat = to_dense_adj(
-        eval_data["cell", "expresses", "gene"].edge_index,
-    )[0, : eval_data["cell"].num_nodes, : eval_data["gene"].num_nodes]
+    gexp_mat = (
+        to_dense_adj(
+            eval_data["cell", "expresses", "gene"].edge_index,
+        )[0, : eval_data["cell"].num_nodes, : eval_data["gene"].num_nodes]
+        .cpu()
+        .numpy()
+    )
     gexp_mean = gexp_mat.mean(axis=0)
     gexp_norm = gexp_mat / (gexp_mean + 1e-6)
+    gexp_dataset = CustomIndexDataset(
+        ("cell", "expresses", "gene"),
+        torch.arange(eval_data["cell", "expresses", "gene"].num_edges),
+    )
     gexp_loader = DataLoader(
-        CustomIndexDataset(
-            [("cell", "expresses", "gene")],
-            torch.arange(eval_data["cell", "expresses", "gene"].num_edges),
-        ),
+        gexp_dataset,
         batch_size=batch_size,
         collate_fn=collate,
         shuffle=False,
+        pin_memory_device=device,
     )
     with torch.no_grad():
         model.eval()
@@ -110,14 +117,14 @@ def get_gexp_metrics(
         neg_idx = []
         for gene_batch in tqdm(gexp_loader):
             gene_edge_type, gene_label_index = gene_batch
-            gene_edge_type = tuple(gene_edge_type)
-            gene_batch = eval_data.edge_type_subgraph(gene_edge_type).edge_subgraph(
+            gene_batch = eval_data.edge_subgraph(
                 {
-                    gene_edge_type: gene_label_index,
+                    gene_edge_type: gene_label_index.to(device),
                 }
             )
+            print(gene_batch)
             pos_dist_dict, neg_edge_index_dict, neg_dist_dict = decode(
-                model, gene_batch, data, n_negative_samples=n_negative_samples
+                model, gene_batch, train_index, n_negative_samples=n_negative_samples
             )
             means.append(pos_dist_dict[("cell", "expresses", "gene")].mean)
             stds.append(pos_dist_dict[("cell", "expresses", "gene")].stddev)
@@ -128,16 +135,14 @@ def get_gexp_metrics(
         gexp_pred_mu = torch.cat(means + neg_means)
         gexp_pred_std = torch.cat(stds + neg_stds)
         gexp_neg_idx = torch.cat(neg_idx)
+    pos_idxs = eval_data["cell", "expresses", "gene"].edge_index[:, gexp_dataset.index]
+    all_idxs = torch.cat([pos_idxs, gexp_neg_idx], dim=1)
     test_dense_mat = scipy.sparse.coo_matrix(
         (
-            gexp_pred_mu.detach().numpy(),
+            gexp_pred_mu.detach().cpu().numpy(),
             (
-                eval_data["cell", "expresses", "gene"]
-                .edge_index[0][torch.cat([gexp_loader.index, gexp_neg_idx])]
-                .numpy(),
-                eval_data["cell", "expresses", "gene"]
-                .edge_index[1][torch.cat([gexp_loader.index, gexp_neg_idx])]
-                .numpy(),
+                all_idxs[0].detach().cpu().numpy(),
+                all_idxs[1].detach().cpu().numpy(),
             ),
         )
     )
@@ -148,7 +153,7 @@ def get_gexp_metrics(
         if gexp_mean[i] == 0:
             continue
         corrs.append(np.corrcoef(res_out_norm[:, i], gexp_norm[:, i])[0, 1].item())
-    return np.array(corrs)
+    return {"per-gene corr": np.array(corrs), "corr_mean": np.mean(corrs)}
 
 
 def get_accessibility_metrics(
@@ -157,17 +162,19 @@ def get_accessibility_metrics(
     data: torch_geometric.data.Data,
     batch_size: Optional[int] = None,
     n_negative_samples: Optional[int] = None,
+    device: str = "cpu",
 ):
     if batch_size is None:
-        batch_size = 1e6
+        batch_size = int(1e6)
     acc_loader = DataLoader(
         CustomIndexDataset(
-            [("cell", "has_accessible", "peak")],
+            ("cell", "has_accessible", "peak"),
             torch.arange(eval_data["cell", "has_accessible", "peak"].num_edges),
         ),
         batch_size=batch_size,
         collate_fn=collate,
         shuffle=False,
+        pin_memory_device=device,
     )
     with torch.no_grad():
         model.eval()
@@ -177,11 +184,12 @@ def get_accessibility_metrics(
         neg_stds = []
         neg_idx = []
         for acc_batch in tqdm(acc_loader):
+
             acc_edge_type, acc_label_index = acc_batch
             acc_edge_type = tuple(acc_edge_type)
             acc_batch = eval_data.edge_type_subgraph(acc_edge_type).edge_subgraph(
                 {
-                    acc_edge_type: acc_label_index,
+                    acc_edge_type: acc_label_index.to(device),
                 }
             )
             true_acc = []
@@ -189,7 +197,7 @@ def get_accessibility_metrics(
             label_idxs = []
             label_idxs.append(acc_label_index)
             pos_dist_dict, neg_edge_index_dict, neg_dist_dict = decode(
-                model, acc_batch, data
+                model, acc_batch, data, n_negative_samples=n_negative_samples
             )
             true_acc.append(
                 (
@@ -198,7 +206,11 @@ def get_accessibility_metrics(
                             acc_batch[
                                 ("cell", "has_accessible", "peak")
                             ].edge_attr.cpu(),
-                            torch.zeros(n_negative_samples),
+                            torch.zeros(
+                                neg_edge_index_dict[
+                                    ("cell", "has_accessible", "peak")
+                                ].shape[1]
+                            ),
                         ],
                         dim=0,
                     )
@@ -240,6 +252,7 @@ def eval(
     index_path: Optional[str] = None,
 ):
     data = torch.load(data, weights_only=False)
+    data.generate_ids()
     data.to(device)
     if index_path is not None:
         index_path = f"{os.path.dirname(model_path)}/data_idx.pkl"
@@ -250,10 +263,12 @@ def eval(
     else:
         idx_dict = data_idx["val"]
     metric_dict = {}
+
     eval_data = data.edge_subgraph(
         {tuple(k.split("__")): v.to(device) for k, v in idx_dict.items()}
     )
     model = LightningProxModel.load_from_checkpoint(model_path, weights_only=True)
+    print("loaded model")
     model.eval()
     if eval_split == "val":
         train_index = {
@@ -275,11 +290,15 @@ def eval(
             tuple(k.split("__")): data[tuple(k.split("__"))]
             .edge_index[
                 :,
-                torch.tensor(set(range(data[tuple(k.split("__"))].num_edges)) - set(v)),
+                torch.tensor(
+                    list(set(range(data[tuple(k.split("__"))].num_edges)) - set(v)),
+                    dtype=torch.long,
+                ),
             ]
             .to(device)
             for k, v in data_idx["test"].items()
         }
+        print(train_index)
 
     possible_edge_types = [
         ("cell", "has_accessible", "peak"),
@@ -292,14 +311,16 @@ def eval(
             train_index,
             n_negative_samples=n_negative_samples,
             batch_size=batch_size,
+            device=device,
         )
     if ("cell", "has_accessible", "peak") in eval_data.edge_types:
-        metric_dict["acc"] = get_gexp_metrics(
+        metric_dict["acc"] = get_accessibility_metrics(
             model,
             eval_data,
             train_index,
             n_negative_samples=n_negative_samples,
             batch_size=batch_size,
+            device=device,
         )
 
     return metric_dict
