@@ -1,6 +1,6 @@
 # CLI reference
 
-Generated: 2025-10-13T18:55:56.434169Z
+Generated: 2025-10-21T17:57:16.935401Z
 
 Run `python -m simba_plus.simba_plus <subcommand> -h` for usage examples.
 
@@ -33,9 +33,8 @@ options:
 ```
 usage: simba+ train [-h] [--adata-CG ADATA_CG] [--adata-CP ADATA_CP]
                     [--batch-size BATCH_SIZE] [--output-dir OUTPUT_DIR]
-                    [--load-checkpoint] [--promote-indep]
-                    [--hidden-dims HIDDEN_DIMS] [--hsic-lam HSIC_LAM]
-                    [--get-adata] [--pos-scale]
+                    [--load-checkpoint] [--hidden-dims HIDDEN_DIMS]
+                    [--hsic-lam HSIC_LAM] [--get-adata] [--pos-scale]
                     data_path
 
 Train SIMBA+ model on the given HetData object.
@@ -57,8 +56,6 @@ options:
                         Top-level output directory where run artifacts will be
                         stored
   --load-checkpoint     If set, resume training from the last checkpoint
-  --promote-indep       Enable HSIC-based independence promotion between
-                        modalities
   --hidden-dims HIDDEN_DIMS
                         Dimensionality of hidden and latent embeddings
   --hsic-lam HSIC_LAM   HSIC regularization lambda (strength)
