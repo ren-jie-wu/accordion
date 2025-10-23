@@ -11,6 +11,7 @@ from simba_plus.model_prox import LightningProxModel
 import torch
 from torch.utils.data import DataLoader
 import torch_geometric
+from torch_geometric.transforms.to_device import ToDevice
 import lightning as L
 from lightning.pytorch.tuner import Tuner
 
@@ -362,7 +363,7 @@ def run(
         n_no_kl=1,
         n_count_nodes=20,
         n_kl_warmup=50,
-        early_stopping_steps=30,
+        early_stopping_steps=10,
         loss_df=None,
         counts_dicts=None,
         hsic=None,

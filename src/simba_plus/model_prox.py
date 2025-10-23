@@ -7,12 +7,16 @@ from torch.distributions import Distribution
 from torch_geometric.data import HeteroData
 import torch.nn as nn
 from torch_geometric.typing import EdgeType, NodeType
+from torch_geometric.transforms.remove_isolated_nodes import RemoveIsolatedNodes
+from torch_geometric.transforms.to_device import ToDevice
 from simba_plus.encoders import TransEncoder
 
-# from simba_plus.utils import negative_sampling
-from torch_geometric.utils import negative_sampling
+from simba_plus.utils import negative_sampling
+
+# from torch_geometric.utils import negative_sampling
 from simba_plus.losses import bernoulli_kl_loss
 from simba_plus.decoders import RelationalEdgeDistributionDecoder
+import time
 from simba_plus._utils import (
     add_cov_to_latent,
     make_key,
@@ -94,19 +98,6 @@ class LightningProxModel(L.LightningModule):
             node_type: x.shape[0] for (node_type, x) in data.x_dict.items()
         }
         self.train_data_dict = train_data_dict
-        if train_data_dict is not None:
-            self.train_data = self.data.edge_subgraph(
-                {tuple(k.split("__")): v for k, v in train_data_dict.items()}
-            ).to(device)
-            train_val_idx = {}
-            for k in train_data_dict.keys():
-                if val_data_dict is not None:
-                    train_val_idx[k] = torch.cat([train_data_dict[k], val_data_dict[k]])
-                else:
-                    train_val_idx[k] = train_data_dict[k]
-            self.train_val_data = self.data.edge_subgraph(
-                {tuple(k.split("__")): v for k, v in train_val_idx.items()}
-            ).to(device)
         self.reweight_rarecell = reweight_rarecell
         if self.reweight_rarecell:
             self.cell_weights = torch.ones(data["cell"].num_nodes, device=device)
@@ -291,7 +282,7 @@ class LightningProxModel(L.LightningModule):
         num_neg_samples: If neg_edge_index is None and
             num_neg_samples is None, This number of negative edges are sampled. Otherwise, the same number as the positive edges are sample.
         """
-        # import pdb; pdb.set_trace()
+
         pos_dist_dict: Dict[EdgeType, Distribution] = self.decoder(
             batch,
             z_dict,
@@ -300,15 +291,13 @@ class LightningProxModel(L.LightningModule):
             bias_dict=self.bias_dict,
             std_dict=self.std_dict,
         )
+
         if neg_sample:
             if neg_edge_index_dict is None:
-                if self.training:
-                    pos_idx_data = self.train_data
-                else:
-                    pos_idx_data = self.train_val_data
                 neg_edge_index_dict = {}
 
                 for edge_type, pos_edge_index in pos_edge_index_dict.items():
+
                     if len(pos_edge_index) == 0:
                         continue
                     src_type, _, dst_type = edge_type
@@ -316,16 +305,16 @@ class LightningProxModel(L.LightningModule):
                         neg_src_idx,
                         neg_dst_idx,
                     ) = negative_sampling(
-                        pos_idx_data.edge_index_dict[edge_type],
+                        batch.edge_index_dict[edge_type],
                         num_nodes=(
-                            pos_idx_data[src_type].num_nodes,
-                            pos_idx_data[dst_type].num_nodes,
+                            batch[src_type].num_nodes,
+                            batch[dst_type].num_nodes,
                         ),
                         # num_neg_samples_fold=self.num_neg_samples_fold,
-                        num_neg_samples=pos_edge_index.shape[1]
-                        * self.num_neg_samples_fold,
+                        num_neg_samples_fold=self.num_neg_samples_fold,
                         # method="dense",
                     )
+
                     # if (neg_src_idx > batch[src_type].num_nodes).any():  # pragma: no cover
                     #     raise ValueError(
                     #         f"Negative sampling produced indices larger than the number of nodes in {src_type}. "
@@ -334,6 +323,7 @@ class LightningProxModel(L.LightningModule):
                     neg_edge_index_dict[edge_type] = torch.stack(
                         [neg_src_idx, neg_dst_idx]
                     )
+
             neg_dist_dict: Dict[EdgeType, Tensor] = self.decoder(
                 batch,
                 z_dict,
@@ -346,89 +336,21 @@ class LightningProxModel(L.LightningModule):
         loss_dict = {}
         metric_dict = {}
         for edge_type, pos_dist in pos_dist_dict.items():
+
             src_type, _, dst_type = edge_type
             pos_edge_weights = pos_edge_weight_dict[edge_type]
-            pos_log_probs = -pos_dist.log_prob(pos_edge_weights)
+            pos_loss = -pos_dist.log_prob(pos_edge_weights).sum()
+
             if neg_sample:
                 neg_log_probs = -neg_dist_dict[edge_type].log_prob(
                     torch.tensor(0.0, device=batch[src_type].x.device)
                     if batch[edge_type].edge_dist != "Beta"
                     else torch.tensor(1e-6, device=batch[src_type].x.device)
                 )
-            if self.reweight_rarecell and src_type == "cell":
-                pos_log_probs *= self.cell_weights[batch[src_type].n_id]
-                if neg_sample:
-                    neg_log_probs *= self.cell_weights[
-                        batch[src_type].n_id[neg_src_idx]
-                    ]
-            pos_loss = pos_log_probs.sum()
-            if neg_sample:
                 neg_loss = neg_log_probs.sum()
                 loss_dict[edge_type] = pos_loss + neg_loss
             else:
                 loss_dict[edge_type] = pos_loss
-
-            if get_metric:
-                if edge_type == ("cell", "expresses", "gene"):
-                    # import pdb; pdb.set_trace()
-                    metric_dict[edge_type] = compute_reconstruction_gene_metrics(
-                        pos_edge_weights,
-                        pos_dist_dict[edge_type].mean,
-                        pos_dist_dict[edge_type].stddev,
-                        plot=plot,
-                    )
-                    # plot the pos, neg and overall log p distribution
-                    if plot:
-                        if neg_sample:
-                            plot_nll_distributions(
-                                pos_log_probs.detach().cpu().numpy(),
-                                neg_log_probs.detach().cpu().numpy(),
-                                name="cell_express_gene",
-                            )
-                        else:
-                            plot_nll_distributions(
-                                pos_log_probs.detach().cpu().numpy(),
-                                name="cell_express_gene",
-                            )
-
-                elif edge_type == ("cell", "has_accessible", "peak"):
-                    # import pdb; pdb.set_trace()
-                    if get_metric:
-                        neg_size = neg_edge_index_dict[edge_type].shape[1]
-                        ground_truth = (
-                            torch.cat(
-                                [
-                                    pos_edge_weights,
-                                    torch.zeros(
-                                        neg_size, device=batch[src_type].x.device
-                                    ),
-                                ],
-                                dim=0,
-                            )
-                            .detach()
-                            .cpu()
-                        )
-                        pred = (
-                            torch.cat(
-                                [
-                                    pos_dist_dict[edge_type].logits,
-                                    neg_dist_dict[edge_type].logits,
-                                ],
-                                dim=0,
-                            )
-                            .detach()
-                            .cpu()
-                        )
-                        pred = torch.sigmoid(pred)
-                        metric_dict[edge_type] = compute_classification_metrics(
-                            ground_truth, pred, plot=plot
-                        )
-                    if plot:
-                        plot_nll_distributions(
-                            pos_log_probs.detach().cpu().numpy(),
-                            neg_log_probs.detach().cpu().numpy(),
-                            name="cell_has_peak",
-                        )
 
         return loss_dict, neg_edge_index_dict, metric_dict
 
@@ -559,13 +481,20 @@ class LightningProxModel(L.LightningModule):
     def training_step(self, batch, batch_idx):
         edge_attr_type, idx = batch
         edge_attr_type = tuple(edge_attr_type)
-        batch = (
-            self.data.edge_type_subgraph([edge_attr_type])
-            .edge_subgraph({edge_attr_type: idx.to("cpu")})
-            .to(self.device)
+
+        batch = RemoveIsolatedNodes()(
+            self.data.edge_type_subgraph([edge_attr_type]).edge_subgraph(
+                {edge_attr_type: idx.cpu()}
+            )
         )
+        t0 = time.time()
+        batch = ToDevice(self.device)(batch)
+        print(f"moving to gpu:{time.time()-t0}")
+
         mu_dict, logstd_dict = self.encode(batch)
+
         z_dict = self.reparametrize(mu_dict, logstd_dict)
+
         batch_nll_loss, neg_edge_index_dict, _ = self.nll_loss(
             batch,
             z_dict,
@@ -624,7 +553,7 @@ class LightningProxModel(L.LightningModule):
         edge_attr_type = tuple(edge_attr_type)
         batch = (
             self.data.edge_type_subgraph([edge_attr_type])
-            .edge_subgraph({edge_attr_type: idx.to("cpu")})
+            .edge_subgraph({edge_attr_type: idx})
             .to(self.device)
         )
 
