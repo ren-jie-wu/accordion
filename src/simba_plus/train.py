@@ -17,6 +17,7 @@ from lightning.pytorch.tuner import Tuner
 
 from lightning.pytorch.callbacks import ModelCheckpoint, LearningRateMonitor
 from lightning.pytorch.loggers import WandbLogger
+import wandb
 import scanpy as sc
 import simba_plus.load_data
 from simba_plus.encoders import TransEncoder
@@ -370,7 +371,12 @@ def run(
         lr=1e-3,
         run_id="",
     ):
-
+        wandb.init(project=f"pyg_simba_{output_dir.replace('/', '_')}")
+        code_directory_path = os.path.dirname(os.path.abspath(__file__))
+        wandb_logger = WandbLogger(project=f"pyg_simba_{output_dir.replace('/', '_')}")
+        code_artifact = wandb.Artifact("my-python-code", type="code")
+        code_artifact.add_dir(code_directory_path)
+        wandb_logger.experiment.log_artifact(code_artifact)
         wandb_logger = WandbLogger(project=f"pyg_simba_{output_dir.replace('/', '_')}")
         wandb_logger.experiment.config.update(
             {
