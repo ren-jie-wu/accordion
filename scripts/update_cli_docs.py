@@ -13,7 +13,7 @@ SUBCOMMANDS = ["load_data", "train", "eval"]
 os.makedirs(OUT_DIR, exist_ok=True)
 
 lines = []
-lines.append(f"# CLI reference\n\nGenerated: {datetime.now().isoformat()}Z\n\n")
+
 lines.append(
     "Run `python -m simba_plus.simba_plus <subcommand> -h` for usage examples.\n\n"
 )
