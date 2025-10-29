@@ -78,10 +78,10 @@ def run(
     data_path: str = None,
     load_checkpoint: bool = False,
     checkpoint_suffix: str = "",
+    num_workers: int = 30,
     reweight_rarecell: bool = False,
     n_no_kl: int = 0,
     n_kl_warmup: int = 1,
-    project_decoder: bool = False,
     hidden_dims: int = 50,
     hsic_lam: float = 0.0,
     edgetype_specific_scale: bool = True,
@@ -109,7 +109,7 @@ def run(
         scale_tag = ".d"
     else:
         scale_tag = ""
-    run_id = f"pl_{os.path.basename(data_path).split('_HetData.dat')[0]}_{human_format(batch_size)}{'x'+str(n_batch_sampling) if n_batch_sampling > 1 else ''}_prox{'.noproj' if not project_decoder else ''}{'.rw' if reweight_rarecell else ''}{'.indep2_' + format(hsic_lam, '1.0e') if hsic_lam != 0 else ''}{'.d' + str(hidden_dims) if hidden_dims != 50 else ''}{'.enss' if not edgetype_specific_scale else ''}{'.enst' if not edgetype_specific_std else ''}{'.ensb' if not edgetype_specific_bias else ''}{'.nn' if nonneg else ''}{scale_tag}.randinit"
+    run_id = f"pl_{os.path.basename(data_path).split('_HetData.dat')[0]}_{human_format(batch_size)}{'x'+str(n_batch_sampling) if n_batch_sampling > 1 else ''}_prox{'.rw' if reweight_rarecell else ''}{'.indep2_' + format(hsic_lam, '1.0e') if hsic_lam != 0 else ''}{'.herit' if ldsc_res is not None else ''}{'.d' + str(hidden_dims) if hidden_dims != 50 else ''}{'.enss' if not edgetype_specific_scale else ''}{'.enst' if not edgetype_specific_std else ''}{'.ensb' if not edgetype_specific_bias else ''}{'.nn' if nonneg else ''}{scale_tag}.randinit"
 
     prefix = f"{output_dir}/"
     checkpoint_dir = f"{prefix}/{run_id}.checkpoints/"
@@ -144,14 +144,22 @@ def run(
         edge_types = [("cell", "has_accessible", "peak"), ("cell", "expresses", "gene")]
 
     pldata = get_edge_split_datamodule(
-        data,
-        edge_types,
-        batch_size,
-        checkpoint_dir,
-        logger,
+        data=data,
+        edge_types=edge_types,
+        batch_size=batch_size,
+        num_workers=num_workers,
+        output_dir=output_dir,
+        checkpoint_dir=checkpoint_dir,
+        logger=logger,
     )
 
-    node_weights_dict = get_node_weights(data, pldata, checkpoint_dir, logger, device)
+    node_weights_dict = get_node_weights(
+        data=data,
+        pldata=pldata,
+        checkpoint_dir=checkpoint_dir,
+        logger=logger,
+        device=device,
+    )
     n_batches = len(pldata.train_loader) // batch_size + 1
     logger.info(f"@N_BATCHES:{n_batches}")
     n_val_batches = len(pldata.val_loader) // batch_size + 1
@@ -180,7 +188,7 @@ def run(
         hsic = None
     if ldsc_res is not None:
         peak_res = get_peak_residual(ldsc_res, adata_CP, checkpoint_dir, logger)
-        herit_loss = SumstatResidualLoss(peak_res, device)
+        herit_loss = SumstatResidualLoss(peak_res, device, n_factors=dim_u)
     else:
         herit_loss = None
 
@@ -473,7 +481,12 @@ def add_argument(parser):
         action="store_true",
         help="Use positive-only scaling for the mean of output distributions",
     )
-
+    parser.add_argument(
+        "--num-workers",
+        type=int,
+        default=30,
+        help="Number of worker processes for data loading",
+    )
     return parser
 
 

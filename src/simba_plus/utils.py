@@ -121,8 +121,8 @@ def structured_negative_sampling(
     return edge_index[0], edge_index[1], rand.to(edge_index.device)
 
 
-def get_edge_split_data(data, edge_types, checkpoint_dir, logger):
-    data_idx_path = f"{checkpoint_dir}/data_idx.pkl"
+def get_edge_split_data(data, edge_types, output_dir, logger):
+    data_idx_path = f"{output_dir}/data_idx.pkl"
     if os.path.exists(data_idx_path):
         # Load existing train/val/test split
         train_idxs = []
@@ -208,16 +208,26 @@ def get_edge_split_datamodule(
     data,
     edge_types,
     batch_size,
+    num_workers,
+    output_dir,
     checkpoint_dir,
     logger,
 ):
-    train_data, val_data = get_edge_split_data(data, edge_types, checkpoint_dir, logger)
-    train_loader, val_loader = get_dataloader(train_data, val_data, data, batch_size)
+    train_data, val_data = get_edge_split_data(
+        data=data, edge_types=edge_types, output_dir=output_dir, logger=logger
+    )
+    train_loader, val_loader = get_dataloader(
+        train_data=train_data,
+        val_data=val_data,
+        data=data,
+        batch_size=batch_size,
+        num_workers=num_workers,
+    )
     pldata = MyDataModule(train_loader, val_loader)
     return pldata
 
 
-def get_dataloader(train_data, val_data, data, batch_size):
+def get_dataloader(train_data, val_data, data, batch_size, num_workers: int = 30):
     def collate(idx, data=data):
         batch = {}
         for d in idx:
@@ -231,10 +241,10 @@ def get_dataloader(train_data, val_data, data, batch_size):
         )
 
     train_loader = DataLoader(
-        train_data, batch_size=batch_size, collate_fn=collate, num_workers=10
+        train_data, batch_size=batch_size, collate_fn=collate, num_workers=num_workers
     )
     val_loader = DataLoader(
-        val_data, batch_size=batch_size, collate_fn=collate, num_workers=10
+        val_data, batch_size=batch_size, collate_fn=collate, num_workers=num_workers
     )
     return train_loader, val_loader
 

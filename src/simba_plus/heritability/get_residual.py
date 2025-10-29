@@ -161,6 +161,8 @@ def get_peak_residual(
         peak_to_snp_overlap = get_overlap(ldsc_res, adata_CP.var)
         plot_hist(peak_to_snp_overlap, logger)
         ldsc_mat = ldsc_res.iloc[:, 3:].fillna(0).astype(np.float32)
-        peak_res = peak_to_snp_overlap @ ldsc_mat  # n_peaks x n_sumstatss
+        peak_res = (
+            peak_to_snp_overlap / peak_to_snp_overlap.sum(axis=1)
+        ) @ ldsc_mat  # n_peaks x n_sumstatss
         np.save(peak_res_path, peak_res)
     return peak_res.astype(np.float32)
