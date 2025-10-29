@@ -94,6 +94,7 @@ def run(
     pos_scale: bool = False,
     scale_src: bool = True,
     ldsc_res: Optional[pd.DataFrame] = None,
+    early_stopping_steps: int = 3,
 ):
     """Train the model with the given parameters.
     If get_adata is True, it will only load the gene/peak/cell AnnData object from the checkpoint.
@@ -215,7 +216,7 @@ def run(
 
     def train(
         rpvgae,
-        early_stopping_steps=10,
+        early_stopping_steps=early_stopping_steps,
         run_id="",
     ):
         code_directory_path = os.path.dirname(os.path.abspath(__file__))
@@ -486,6 +487,12 @@ def add_argument(parser):
         type=int,
         default=30,
         help="Number of worker processes for data loading",
+    )
+    parser.add_argument(
+        "--early-stopping-steps",
+        type=int,
+        default=3,
+        help="Number of epoch for early stopping patience",
     )
     return parser
 
