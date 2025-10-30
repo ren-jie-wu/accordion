@@ -10,7 +10,13 @@ authors = [
   { name="Junxi Feng", email="junxifeng0511@gmail.com"}
 ]
 dependencies = [
-  "torch_geometric", "scvi-tools", "anndata", "lightning", "scikit-learn", "scipy<1.15", "matplotlib", "seaborn", "wandb", "tables", "papermill", "pybedtools", "bitarray", "nose", "pysam", "python-dateutil", "pytz", "six", "scipy"]
+  "torch_geometric", "scvi-tools", "anndata", "lightning", "scikit-learn", "scipy<1.15", "matplotlib", "seaborn", "wandb", "tables", "papermill", "pybedtools", "bitarray", "nose", "pysam", "python-dateutil", "pytz", "six", "scipy",   "pyranges",
+  "numpy",
+  "pandas",
+  "xgboost",
+  "joblib",
+  "tqdm",]
+
 description = "SIMBA+"
 readme = "README.md"
 requires-python = ">=3.9"
