@@ -1,11 +1,6 @@
-# CLI reference
-
-
-=======
-
 Run `python -m simba_plus.simba_plus <subcommand> -h` for usage examples.
 
-## `load_data`
+## simba+ `load_data` ... 
 
 ```
 usage: simba+ load_data [-h] [--gene-adata GENE_ADATA]
@@ -29,15 +24,16 @@ options:
                         AnnData is not provided, peak AnnData will be used.
 ```
 
-## `train`
+## simba+ `train` ... 
 
 ```
 usage: simba+ train [-h] [--adata-CG ADATA_CG] [--adata-CP ADATA_CP]
                     [--batch-size BATCH_SIZE] [--output-dir OUTPUT_DIR]
-                    [--load-checkpoint]
+                    [--sumstats SUMSTATS] [--load-checkpoint]
                     [--checkpoint-suffix CHECKPOINT_SUFFIX]
                     [--hidden-dims HIDDEN_DIMS] [--hsic-lam HSIC_LAM]
-                    [--get-adata] [--pos-scale]
+                    [--get-adata] [--pos-scale] [--num-workers NUM_WORKERS]
+                    [--early-stopping-steps EARLY_STOPPING_STEPS]
                     data_path
 
 Train SIMBA+ model on the given HetData object.
@@ -58,6 +54,11 @@ options:
   --output-dir OUTPUT_DIR
                         Top-level output directory where run artifacts will be
                         stored
+  --sumstats SUMSTATS   If provided, LDSC is run so that peak loading
+                        maximally explains the residual of LD score regression
+                        of summary statistics. Provide a TSV file with one
+                        trait name and path to summary statistics file per
+                        line.
   --load-checkpoint     If set, resume training from the last checkpoint
   --checkpoint-suffix CHECKPOINT_SUFFIX
                         Append a suffix to checkpoint filenames
@@ -69,9 +70,13 @@ options:
                         checkpoint and exit
   --pos-scale           Use positive-only scaling for the mean of output
                         distributions
+  --num-workers NUM_WORKERS
+                        Number of worker processes for data loading
+  --early-stopping-steps EARLY_STOPPING_STEPS
+                        Number of epoch for early stopping patience
 ```
 
-## `eval`
+## simba+ `eval` ... 
 
 ```
 usage: simba+ eval [-h] [--idx-path IDX_PATH] [--batch-size BATCH_SIZE]
