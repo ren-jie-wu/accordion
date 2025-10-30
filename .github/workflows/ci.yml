@@ -32,13 +32,13 @@ jobs:
       - name: Run CLI doc generator
         env:
           PYTHONPATH: ${{ github.workspace }}/src
-          PDOC_ALLOW_EXEC: 1
         run: |
           python scripts/update_cli_docs.py
 
       - name: Generate API docs (pdoc)
         env:
           PYTHONPATH: ${{ github.workspace }}/src
+          PDOC_ALLOW_EXEC: 1
         run: |
           # output HTML into docs/api (overwrite)
           python -m pdoc --output-dir docs/api simba_plus
