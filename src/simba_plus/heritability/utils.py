@@ -1,44 +1,80 @@
 import os
+import numpy as np
 import pandas as pd
 from simba_plus.utils import write_bed
+import pybedtools
+from scipy.sparse import lil_matrix
 
 
-def get_overlap(snp_df, output_dir, data_path, adata_CP):
-    snp_to_peak_path = f"{output_dir}/snp_to_peak.txt"
-    create_snp_to_peak = not os.path.exists(snp_to_peak_path)
-    if create_snp_to_peak:
-        write_bed(
-            adata_CP,
-            filename=f"{output_dir}/peaks.bed",
-        )
-        filedir = "/data/pinello/PROJECTS/2023_09_JF_SIMBAvariant/pre_ldsc_analysis/sldsc_analysis/ldsc_files"
-        os.system(
-            f"bedtools intersect -a {filedir}/ref_bed_files/ref.bed -b {output_dir}/peaks.bed -wb -loj > {output_dir}/snp_to_peak.txt"
-        )
-    snp_to_peak = pd.read_csv(snp_to_peak_path, sep="\t", header=None)
-    snp_to_peak.columns = [
-        "chrom",
-        "start",
-        "end",
-        "snp_id",
-        "peak_chrom",
-        "peak_start",
-        "peak_end",
-    ]
-    snp_df["pid"] = (
-        snp_to_peak["peak_chrom"]
-        + "_"
-        + snp_to_peak["peak_start"].astype(str)
-        + "_"
-        + snp_to_peak["peak_end"].astype(str)
+def get_overlap(snp_df, peak_df):
+    # Convert SNP and peak dataframes to BedTool objects
+    snp_df = snp_df.rename(columns={"CHR": "chrom", "BP": "start"})
+    snp_df.insert(2, "end", snp_df["start"] + 1)
+    snp_df["name"] = range(len(snp_df))
+    snp_df = snp_df.loc[
+        :, ~snp_df.columns.duplicated()
+    ].copy()  # Remove duplicate columns
+
+    snp_bed = pybedtools.BedTool.from_dataframe(
+        snp_df[["chrom", "start", "end", "name"]]
     )
-    adata_CP.var["pid"] = (
-        adata_CP.var["chr"]
-        + "_"
-        + adata_CP.var["start"].astype(str)
-        + "_"
-        + adata_CP.var["end"].astype(str)
+    peak_df = peak_df.loc[:, ~peak_df.columns.duplicated()].copy()
+    # If chromosome naming convention is different, adjust here
+    if peak_df["chrom"].astype(str).iloc[0].startswith("chr") and not snp_df[
+        "chrom"
+    ].astype(str).iloc[0].startswith("chr"):
+        peak_df["chrom"] = peak_df["chrom"].apply(lambda x: x.replace("chr", ""))
+    elif not peak_df["chrom"].astype(str).iloc[0].startswith("chr") and snp_df[
+        "chrom"
+    ].astype(str).iloc[0].startswith("chr"):
+        peak_df["chrom"] = peak_df["chrom"].apply(lambda x: "chr" + x)
+    peak_df["name"] = range(len(peak_df))
+    peak_bed = pybedtools.BedTool.from_dataframe(
+        peak_df[["chrom", "start", "end", "name"]]
     )
 
-    snp_df_peaksubset = adata_CP.var[["pid"]].merge(snp_df, on="pid", how="left")
-    return snp_df_peaksubset.values
+    # Perform intersection
+    intersection = snp_bed.intersect(peak_bed, wa=True, wb=True)
+
+    # Parse the intersection results
+    # Initialize a sparse matrix with dimensions (number of peaks, number of SNPs)
+    num_snps = len(snp_df)
+    num_peaks = len(peak_df)
+    overlap_matrix = lil_matrix((num_peaks, num_snps), dtype=int)
+
+    for line in intersection:
+        snp_index = int(line[3])  # Assuming SNP index is in the 4th column
+        peak_index = int(line[7])  # Assuming peak index is in the 7th column
+        overlap_matrix[peak_index, snp_index] = 1
+    if overlap_matrix.sum() == 0:
+        raise ValueError("No overlaps found between SNPs and peaks.")
+    # Calculate the number of SNPs per peak
+    return overlap_matrix
+
+
+def plot_hist(overlap_matrix, logger):
+    snps_per_peak = overlap_matrix.sum(axis=1).A1  # Convert sparse matrix to 1D array
+
+    # Create an ASCII histogram
+    max_count = max(snps_per_peak)
+    bin_width = max(1, max_count // 50)  # Adjust bin width for better visualization
+    zero_count = (snps_per_peak == 0).sum()
+    high_quantile = np.percentile(snps_per_peak, 90)
+    bins = (
+        [0, 1]
+        + list(range(1, int(high_quantile) + bin_width, bin_width))
+        + [max_count + 1]
+    )
+    histogram = np.histogram(snps_per_peak, bins=bins)
+
+    logger.info("ASCII Histogram of SNPs per Peak:")
+    hist_str = ""
+    if zero_count > 0:
+        bar = "#" * (zero_count // max(1, max(histogram[0]) // 50))
+        hist_str += f"          0: {bar}\n"
+    for i in range(1, len(histogram[0])):
+        bar = "#" * (histogram[0][i] // max(1, max(histogram[0]) // 50))
+        if bar == "":
+            continue
+        hist_str += f"{bins[i]:>5} - {bins[i+1]:>5}: {bar}\n"
+    logger.info(hist_str)

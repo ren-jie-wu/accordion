@@ -12,6 +12,10 @@ from lightning.pytorch.callbacks.early_stopping import EarlyStopping
 import os
 import pickle as pkl
 from simba_plus.loader import CustomMultiIndexDataset
+import logging
+import sys
+from pathlib import Path
+from logging.handlers import RotatingFileHandler
 
 
 def negative_sampling(edge_index, num_nodes, num_neg_samples_fold=2):
@@ -50,6 +54,10 @@ class MyDataModule(L.LightningDataModule):
         super().__init__()
         self.train_loader = train_loader
         self.val_loader = val_loader
+
+    def setup(self, stage: str):
+        if stage == "fit":
+            self.train_loader.dataset.setup()
 
     def train_dataloader(self):
         return self.train_loader
@@ -121,8 +129,8 @@ def structured_negative_sampling(
     return edge_index[0], edge_index[1], rand.to(edge_index.device)
 
 
-def get_edge_split_data(data, edge_types, output_dir, logger):
-    data_idx_path = f"{output_dir}/data_idx.pkl"
+def get_edge_split_data(data, data_path, edge_types, logger):
+    data_idx_path = f"{data_path.split(".dat")[0]}_data_idx.pkl"
     if os.path.exists(data_idx_path):
         # Load existing train/val/test split
         train_idxs = []
@@ -206,15 +214,15 @@ def get_edge_split_data(data, edge_types, output_dir, logger):
 
 def get_edge_split_datamodule(
     data,
+    data_path,
     edge_types,
     batch_size,
     num_workers,
-    output_dir,
     checkpoint_dir,
     logger,
 ):
     train_data, val_data = get_edge_split_data(
-        data=data, edge_types=edge_types, output_dir=output_dir, logger=logger
+        data=data, edge_types=edge_types, data_path=data_path, logger=logger
     )
     train_loader, val_loader = get_dataloader(
         train_data=train_data,
@@ -331,3 +339,55 @@ def write_bed(adata, filename=None):
     peaks_selected.to_csv(filename, sep="\t", header=False, index=False)
     fp, fn = os.path.split(filename)
     print(f'"{fn}" was written to "{fp}".')
+
+
+def setup_logging(
+    name: str = "simba_plus",
+    log_dir: Optional[str] = None,
+    level: str = "INFO",
+    file_name: Optional[str] = None,
+    console: bool = True,
+):
+    """Create and return a configured logger for use across subcommands.
+
+    - name: logger name (typically the subcommand or package name).
+    - log_dir: when provided, a rotating file handler will be created there.
+    - level: logging level string, e.g. "INFO", "DEBUG".
+    - file_name: optional filename for file logging (defaults to "<name>.log").
+    - console: whether to add a stdout stream handler.
+
+    Repeated calls are idempotent (existing handlers for the same logger are cleared
+    first) so this can be called from different subcommands safely.
+    """
+
+    if file_name is None:
+        file_name = f"{name}.log"
+
+    logger = logging.getLogger(name)
+    log_level = getattr(logging, level.upper(), logging.INFO)
+    logger.setLevel(log_level)
+
+    # Remove existing handlers to avoid duplicated logs when called multiple times.
+    for h in list(logger.handlers):
+        logger.removeHandler(h)
+
+    fmt = "%(asctime)s %(levelname)s [%(name)s] %(message)s"
+    datefmt = "%Y-%m-%d %H:%M:%S"
+    formatter = logging.Formatter(fmt=fmt, datefmt=datefmt)
+
+    if console:
+        ch = logging.StreamHandler(sys.stdout)
+        ch.setLevel(log_level)
+        ch.setFormatter(formatter)
+        logger.addHandler(ch)
+
+    if log_dir:
+        p = Path(log_dir)
+        p.mkdir(parents=True, exist_ok=True)
+        fh = RotatingFileHandler(p / file_name, maxBytes=10_000_000, backupCount=5)
+        fh.setLevel(log_level)
+        fh.setFormatter(formatter)
+        logger.addHandler(fh)
+
+    logger.propagate = False
+    return logger

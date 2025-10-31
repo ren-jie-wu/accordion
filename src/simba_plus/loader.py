@@ -38,6 +38,18 @@ class CustomMultiIndexDataset(Dataset):
             [torch.full((length,), i) for i, length in enumerate(self.lengths)]
         )[perm_idx]
         self.type_idxs = torch.zeros(len(self.lengths), dtype=torch.long)
+        self.setup_count = 0
+
+    def setup(self):
+        print(f"setup called {self.setup_count + 1} times")
+        self.setup_count += 1
+        perm_idx = torch.randperm(
+            self.total_length, generator=torch.Generator().manual_seed(self.setup_count)
+        )
+        self.type_assignments = torch.cat(
+            [torch.full((length,), i) for i, length in enumerate(self.lengths)]
+        )[perm_idx]
+        self.type_idxs = torch.zeros(len(self.lengths), dtype=torch.long)
 
     def __len__(self):
         return self.total_length

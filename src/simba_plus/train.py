@@ -97,6 +97,8 @@ def run(
     pos_scale: bool = False,
     scale_src: bool = True,
     ldsc_res: Optional[pd.DataFrame] = None,
+    sumstats: Optional[str] = None,
+    sumstats_lam: float = 1.0,
     early_stopping_steps: int = 3,
 ):
     """Train the model with the given parameters.
@@ -113,7 +115,7 @@ def run(
         scale_tag = ".d"
     else:
         scale_tag = ""
-    run_id = f"pl_{os.path.basename(data_path).split('_HetData.dat')[0]}_{human_format(batch_size)}{'x'+str(n_batch_sampling) if n_batch_sampling > 1 else ''}_prox{'.rw' if reweight_rarecell else ''}{'.indep2_' + format(hsic_lam, '1.0e') if hsic_lam != 0 else ''}{'.herit' if ldsc_res is not None else ''}{'.d' + str(hidden_dims) if hidden_dims != 50 else ''}{'.enss' if not edgetype_specific_scale else ''}{'.enst' if not edgetype_specific_std else ''}{'.ensb' if not edgetype_specific_bias else ''}{'.nn' if nonneg else ''}{scale_tag}.randinit"
+    run_id = f"pl_{os.path.basename(data_path).split('_HetData.dat')[0]}_{human_format(batch_size)}{'x'+str(n_batch_sampling) if n_batch_sampling > 1 else ''}{'.indep2_' + format(hsic_lam, '1.0e') if hsic_lam != 0 else ''}{os.path.basename(sumstats).split('.txt')[0] if sumstats is not None else ''}{'_'+format(sumstats_lam, '1.0e') if sumstats is not None and sumstats_lam != 1.0 else ''}{'.d' + str(hidden_dims) if hidden_dims != 50 else ''}{'.enss' if not edgetype_specific_scale else ''}{'.enst' if not edgetype_specific_std else ''}{'.ensb' if not edgetype_specific_bias else ''}{'.nn' if nonneg else ''}{scale_tag}.randinit"
 
     prefix = f"{output_dir}/"
     checkpoint_dir = f"{prefix}/{run_id}.checkpoints/"
@@ -149,10 +151,10 @@ def run(
 
     pldata = get_edge_split_datamodule(
         data=data,
+        data_path=data_path,
         edge_types=edge_types,
         batch_size=batch_size,
         num_workers=num_workers,
-        output_dir=output_dir,
         checkpoint_dir=checkpoint_dir,
         logger=logger,
     )
@@ -192,7 +194,9 @@ def run(
         hsic = None
     if ldsc_res is not None:
         peak_res = get_peak_residual(ldsc_res, adata_CP, checkpoint_dir, logger)
-        herit_loss = SumstatResidualLoss(peak_res, device, n_factors=dim_u)
+        herit_loss = SumstatResidualLoss(
+            peak_res, device, n_factors=dim_u, lam=sumstats_lam
+        )
     else:
         herit_loss = None
 
@@ -236,21 +240,20 @@ def run(
                 "early_stopping_steps": early_stopping_steps,
                 "HSIC_loss": hsic_lam,
                 "num_neg_samples_fold": num_neg_samples_fold,
+                "edgetype_specific_bias": edgetype_specific_bias,
                 "edgetype_specific_scale": edgetype_specific_scale,
                 "edgetype_specific_std": edgetype_specific_std,
-                "scale_on_mu_scale": True,
-                "scale_only_cell": False,
             }
         )
         early_stopping_callback = MyEarlyStopping(
-            monitor="val_nll_loss_monitored",
+            monitor="val_loss",
             mode="min",
             strict=True,
             patience=early_stopping_steps,
         )
         checkpoint_callback = ModelCheckpoint(
             checkpoint_dir,
-            monitor="val_nll_loss_monitored",
+            monitor="val_loss",
             mode="min",
             save_last=True,
         )
@@ -410,10 +413,9 @@ def main(args):
             sumstat_list_path=args.sumstats,
             output_path=f"{os.path.dirname(args.sumstats)}/ldsc_residuals/",
             rerun=False,
-            nproc=10,
+            nprocs=args.num_workers,
         )
         kwargs["ldsc_res"] = residuals
-    del kwargs["sumstats"]
     run(**kwargs)
 
 
@@ -453,6 +455,12 @@ def add_argument(parser):
         help="If provided, LDSC is run so that peak loading maximally explains the residual of LD score regression of summary statistics.\nProvide a TSV file with one trait name and path to summary statistics file per line.",
     )
     parser.add_argument(
+        "--sumstats-lam",
+        type=float,
+        default=1.0,
+        help="If provided with `sumstats`, weights the MSE loss for sumstat residuals.",
+    )
+    parser.add_argument(
         "--load-checkpoint",
         action="store_true",
         help="If set, resume training from the last checkpoint",
@@ -489,7 +497,7 @@ def add_argument(parser):
         "--num-workers",
         type=int,
         default=10,
-        help="Number of worker processes for data loading",
+        help="Number of worker processes for data loading and LDSC",
     )
     parser.add_argument(
         "--early-stopping-steps",

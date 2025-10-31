@@ -184,6 +184,7 @@ class SumstatResidualLoss(nn.Module):
         device: torch.device = torch.device("cpu"),
         max_samples: int = 1000,
         n_factors: int = 50,
+        lam: float = 1.0,
     ):
         """
         Initialize SumstatResidualLoss with residuals.
@@ -198,12 +199,13 @@ class SumstatResidualLoss(nn.Module):
         print(self.y)
         self.max_samples = max_samples
         self.coef = nn.Linear(n_factors, self.y.shape[1], bias=False).to(device)
+        self.lam = lam
 
     def forward(self, L, idx):
         y = self.y[idx, :]  # n_idx, n_sumstats
         L_normed = L / torch.norm(L, dim=0, keepdim=True)  # n_idx, n_factors
         loss = (y - self.coef(L_normed)).pow(2).mean(axis=1).sum()
-        return loss
+        return loss * self.lam
 
 
 def weighted_mse_loss(pred, target, weight=None):

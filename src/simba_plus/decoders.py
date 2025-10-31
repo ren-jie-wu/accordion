@@ -44,11 +44,7 @@ class RelationalEdgeDistributionDecoder(torch.nn.Module):
     def __init__(
         self,
         data: HeteroData,
-        encoded_channels: int,
-        projected_channels: Optional[int] = None,
-        add_covariate: bool = False,
         device="cpu",
-        project=True,
         edgetype_specific_bias: bool = True,
         edgetype_specific_scale: bool = True,
         edgetype_specific_std: bool = True,
@@ -61,65 +57,22 @@ class RelationalEdgeDistributionDecoder(torch.nn.Module):
         Args:
             data: HeteroData with node types
             encoded_channels: Number of dimensions of latent vector that will be decoded
-            projected_channels: Number of dimensions of projected latent vector onto the relation-specific space
             add_covariate: add covariate to cell node
         """
         super().__init__()
         self.device = device
-        if projected_channels is not None:
-            projected_channels = encoded_channels
         self.edgetype_specific_bias = edgetype_specific_bias
         self.edgetype_specific_scale = edgetype_specific_scale
         self.edgetype_specific_std = edgetype_specific_std
         self.prob_dict = torch.nn.ModuleDict()
-        # import pdb; pdb.set_trace()
         for edge_type in data.edge_types:
             if edge_type in data.edge_dist_dict.keys():
                 self.prob_dict[",".join(edge_type)] = _DECODER_MAP[
                     data.edge_dist_dict[edge_type]
                 ](
-                    projected_channels,
                     positive_scale=positive_scale,
                     scale_src=decoder_scale_src,
                 )
-        self.add_covariate = add_covariate
-        if hasattr(data["cell"], "cat_covs"):
-            # data["cell"].cat_cov.shape == (n_cat_cov, n_cells)
-            n_cat_covs = data["cell"].cat_cov.shape[0]
-            self.cat_cov_dict = nn.ParameterDict(
-                {
-                    str(k): nn.Parameter(
-                        torch.zeros(
-                            (
-                                len(torch.unique(data["cell"].cat_cov[k, :])),
-                                projected_channels,
-                            )
-                        )
-                    )
-                    for k in range(n_cat_covs)
-                }
-            )
-
-        if hasattr(data["cell"], "cont_covs"):
-            # data["cell"].cont_cov.shape == (n_cont_cov, n_cells)
-            n_cont_covs = data["cell"].cont_cov.shape[0]
-            self.cat_cov_dict = nn.ParameterDict(
-                {
-                    str(k): nn.Parameter(torch.zeros((n_cont_covs, projected_channels)))
-                    for k in range(n_cont_covs)
-                }
-            )
-
-    def project(
-        self, src_z: Tensor, dst_z: Tensor, src_type: NodeType, dst_type: NodeType
-    ) -> Tuple[Tensor, Tensor]:
-        # print(
-        #     f"@DECODER PROJECTION: {self.proj_dict[dst_type].weight.dtype}{dst_z.dtype}"
-        # )
-        if hasattr(self, "proj_dict"):
-            return (self.proj_dict[src_type](src_z), self.proj_dict[dst_type](dst_z))
-        else:
-            return src_z, dst_z
 
     def forward(
         self,
@@ -137,28 +90,27 @@ class RelationalEdgeDistributionDecoder(torch.nn.Module):
             src_type, _, dst_type = edge_type
             src_z = z_dict[src_type]
             dst_z = z_dict[dst_type]
-            src_z = src_z[edge_index[0], :]
-            dst_z = dst_z[edge_index[1], :]
-            u, v = self.project(src_z, dst_z, src_type, dst_type)
+            u = src_z[edge_index[0], :]
+            v = dst_z[edge_index[1], :]
             prob_decoder = self.prob_dict[",".join(edge_type)]
             if self.edgetype_specific_bias:
                 src_bias_key = make_key(src_type, edge_type)
                 dst_bias_key = make_key(dst_type, edge_type)
-            else:
-                src_bias_key = src_type
-                dst_bias_key = dst_type
+            # else:
+            #     src_bias_key = src_type
+            #     dst_bias_key = dst_type
             if self.edgetype_specific_scale:
                 src_scale_key = make_key(src_type, edge_type)
                 dst_scale_key = make_key(dst_type, edge_type)
-            else:
-                src_scale_key = src_type
-                dst_scale_key = dst_type
+            # else:
+            #     src_scale_key = src_type
+            #     dst_scale_key = dst_type
             if self.edgetype_specific_std:
                 src_std_key = make_key(src_type, edge_type)
                 dst_std_key = make_key(dst_type, edge_type)
-            else:
-                src_std_key = src_type
-                dst_std_key = dst_type
+            # else:
+            #     src_std_key = src_type
+            #     dst_std_key = dst_type
 
             use_batch = False
             if hasattr(batch["cell"], "batch"):
@@ -166,32 +118,16 @@ class RelationalEdgeDistributionDecoder(torch.nn.Module):
                 batch_feature = ["gene", "peak"]
 
             src_node_id = batch[src_type].n_id[edge_index[0]]
-            if use_batch and src_type in batch_feature:
-                if dst_type == "cell":
-                    batches = batch[dst_type].batch[edge_index[1]].long()
-                    src_scale = scale_dict[src_scale_key][batches, src_node_id]
-                    src_bias = bias_dict[src_bias_key][batches, src_node_id]
-                    src_std = std_dict[src_std_key][batches, src_node_id]
-                else:
-                    src_scale = scale_dict[src_scale_key][0, src_node_id]
-                    src_bias = bias_dict[src_bias_key][0, src_node_id]
-                    src_std = std_dict[src_std_key][0, src_node_id]
-            else:
-                src_scale = scale_dict[src_scale_key][src_node_id]
-                src_bias = bias_dict[src_bias_key][src_node_id]
-                src_std = std_dict[src_std_key][src_node_id]
+            src_scale = scale_dict[src_scale_key][src_node_id]
+            src_bias = bias_dict[src_bias_key][src_node_id]
+            src_std = std_dict[src_std_key][src_node_id]
 
             dst_node_id = batch[dst_type].n_id[edge_index[1]]
             if use_batch and dst_type in batch_feature:
-                if src_type == "cell":
-                    batches = batch["cell"].batch[edge_index[0]].long()
-                    dst_scale = scale_dict[dst_scale_key][batches, dst_node_id]
-                    dst_bias = bias_dict[dst_bias_key][batches, dst_node_id]
-                    dst_std = std_dict[dst_std_key][batches, dst_node_id]
-                else:
-                    dst_scale = scale_dict[dst_scale_key][0, dst_node_id]
-                    dst_bias = bias_dict[dst_bias_key][0, dst_node_id]
-                    dst_std = std_dict[dst_std_key][0, dst_node_id]
+                batches = batch["cell"].batch[edge_index[0]].long()
+                dst_scale = scale_dict[dst_scale_key][batches, dst_node_id]
+                dst_bias = bias_dict[dst_bias_key][batches, dst_node_id]
+                dst_std = std_dict[dst_std_key][batches, dst_node_id]
             else:
                 dst_scale = scale_dict[dst_scale_key][dst_node_id]
                 dst_bias = bias_dict[dst_bias_key][dst_node_id]
@@ -200,8 +136,6 @@ class RelationalEdgeDistributionDecoder(torch.nn.Module):
             out_dict[edge_type] = prob_decoder.forward(
                 u,
                 v,
-                None,
-                None,
                 src_scale=src_scale,
                 src_bias=src_bias,
                 src_std=src_std,

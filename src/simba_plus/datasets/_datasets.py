@@ -473,20 +473,33 @@ def extract_tarfile(tar_path, extract_path=None, remove_original=True):
         os.remove(tar_path)
 
 
-def heritability():
+def heritability(logger=None):
     """placeholder for heritability dataset loader
 
     Returns
     -------
     None
     """
+
+    def _log(msg):
+        if logger is None:
+            print(msg)
+        else:
+            logger.info(msg)
+
     url_baseline = "https://zenodo.org/records/10515792/files/1000G_Phase3_baselineLD_v2.2_ldscores.tgz?download=1"
     url_weights_hm3 = "https://zenodo.org/records/10515792/files/1000G_Phase3_weights_hm3_no_MHC.tgz?download=1"
     url_frqfile = (
         "https://zenodo.org/records/10515792/files/1000G_Phase3_frq.tgz?download=1"
     )
     url_plink = "https://zenodo.org/records/10515792/files/1000G_Phase3_plinkfiles.tgz?download=1"
-    filepath_prefix = os.path.join(os.path.dirname(__file__), "ldsc_data/")
+    url_snplist = (
+        "https://zenodo.org/records/10515792/files/hm3_no_MHC.list.txt?download=1"
+    )
+
+    filepath_prefix = os.path.join(
+        os.path.dirname(__file__), "../../../data/ldsc_data/"
+    )
     fullpath_baseline = os.path.join(
         filepath_prefix, "1000G_Phase3_baselineLD_v2.2_ldscores.tgz"
     )
@@ -495,46 +508,52 @@ def heritability():
     )
     fullpath_frqfile = os.path.join(filepath_prefix, "1000G_Phase3_frq.tgz")
     fullpath_plink = os.path.join(filepath_prefix, "1000G_Phase3_plinkfiles.tgz")
+    fullpath_snplist = os.path.join(filepath_prefix, "hm3_no_MHC.list.txt")
+
     if not os.path.exists(filepath_prefix):
         os.makedirs(filepath_prefix)
+
     if not os.path.exists(fullpath_baseline.split(".tgz")[0]):
         if not os.path.exists(fullpath_baseline):
-            print(f"Downloading baseline LD scores to {fullpath_baseline}...")
+            _log(f"Downloading baseline LD scores to {fullpath_baseline}...")
             download_url(
                 url_baseline, fullpath_baseline, desc="baselineLD_v2.2_ldscores.tgz"
             )
         extract_tarfile(fullpath_baseline)
-        print(f"Downloaded to {fullpath_baseline}.")
+        _log(f"Downloaded to {fullpath_baseline}.")
+
     if not os.path.exists(fullpath_weights_hm3.split(".tgz")[0]):
         if not os.path.exists(fullpath_weights_hm3):
-            print(f"Downloading weights hm3 to {fullpath_weights_hm3}...")
+            _log(f"Downloading weights hm3 to {fullpath_weights_hm3}...")
             download_url(
                 url_weights_hm3, fullpath_weights_hm3, desc="weights_hm3_no_MHC.tgz"
             )
         extract_tarfile(fullpath_weights_hm3)
-        print(f"Downloaded to {fullpath_weights_hm3}.")
+        _log(f"Downloaded to {fullpath_weights_hm3}.")
+
     if not os.path.exists(fullpath_frqfile.split(".tgz")[0]):
         if not os.path.exists(fullpath_frqfile):
-            print(f"Downloading frq file to {fullpath_frqfile}...")
+            _log(f"Downloading frq file to {fullpath_frqfile}...")
             download_url(url_frqfile, fullpath_frqfile, desc="frq.tgz")
         extract_tarfile(fullpath_frqfile)
-        print(f"Downloaded to {fullpath_frqfile}.")
+        _log(f"Downloaded to {fullpath_frqfile}.")
+
     bedfile_dir = fullpath_plink.split(".tgz")[0]
     bedfile_allchrom = os.path.join(bedfile_dir, "ref.txt")
     if not os.path.exists(bedfile_allchrom):
         if not os.path.exists(fullpath_plink.split(".tgz")[0]):
             if not os.path.exists(fullpath_plink):
-                print(f"Downloading plink file to {fullpath_plink}...")
+                _log(f"Downloading plink file to {fullpath_plink}...")
                 download_url(url_plink, fullpath_plink, desc="plink.tgz")
             extract_tarfile(fullpath_plink)
-            print(f"Downloaded to {fullpath_plink}.")
+            _log(f"Downloaded to {fullpath_plink}.")
 
         for i in range(1, 23):
             bimfile_path = os.path.join(
                 bedfile_dir, f"1000G_EUR_Phase3_plink/1000G.EUR.QC.{i}.bim"
             )
             if not os.path.exists(bimfile_path):
-                print(f"Error: missing PLINK bed file {bimfile_path}")
+                _log(f"Error: missing PLINK bed file {bimfile_path}")
             else:
                 os.system(
                     "awk -v OFS='\\t' '{print $2, $1, $4}' "
@@ -542,3 +561,8 @@ def heritability():
                     + " >> "
                     + bedfile_allchrom
                 )
+
+    if not os.path.exists(fullpath_snplist):
+        _log(f"Downloading SNP list to {fullpath_snplist}...")
+        download_url(url_snplist, fullpath_snplist, desc="hm3_no_MHC.list.txt")
+        _log(f"Downloaded to {fullpath_snplist}.")

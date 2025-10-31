@@ -4,67 +4,18 @@ import os
 import numpy as np
 import pandas as pd
 import anndata as ad
-import subprocess
-import pybedtools
-from scipy.sparse import lil_matrix
-import simba_plus.datasets._datasets
+from simba_plus.heritability.utils import get_overlap, plot_hist
+from simba_plus.heritability.ldsc import run_ldsc_h2
 
 
-def run_ldsc(sumstat_paths, out_dir, rerun=False, nproc=1):
-    simba_plus.datasets._datasets.heritability()
-    processes = []
-    os.makedirs(out_dir, exist_ok=True)
-
-    script_dir = os.path.dirname(__file__)
-    filedir = f"{script_dir}/../datasets/ldsc_data/"
-    ldscdir = f"{script_dir}/../../ldsc/"
-    weights_prefix = f"{filedir}/1000G_Phase3_weights_hm3_no_MHC/weights.hm3_noMHC."
-    frq_prefix = f"{filedir}/1000G_Phase3_frq/1000G.EUR.QC."
-    refmodel_prefix = f"{filedir}/1000G_Phase3_baselineLD_v2.2_ldscores/baselineLD."
-
-    for sumstat_path in list(sumstat_paths):
-        sumstat_basename = (
-            os.path.basename(sumstat_path).split(".gz")[0].split(".sumstats")[0]
-        )
-        out_path = os.path.join(out_dir, sumstat_basename)
-        if (not rerun) and os.path.exists(f"{out_path}.results"):
-            print(f"Skipping existing LDSC output for {sumstat_basename}")
-            continue
-        cmd = [
-            "python",
-            f"{ldscdir}/ldsc.py",
-            "--h2",
-            sumstat_path,
-            "--w-ld-chr",
-            weights_prefix,
-            "--frqfile-chr",
-            frq_prefix,
-            "--ref-ld-chr",
-            refmodel_prefix,
-            "--overlap-annot",
-            "--thin-annot",
-            "--print-coefficients",
-            "--out",
-            out_path,
-            "--print-residuals",
-        ]
-        processes.append(subprocess.Popen(cmd))
-        if len(processes) >= nproc:
-            for process in processes:
-                process.wait()
-            processes = []
-    for process in processes:
-        process.wait()
-
-
-def get_residual(sumstat_list_path, output_path, rerun=False, nproc=10):
+def get_residual(sumstat_list_path, output_path, rerun=False, nprocs=10):
     sumstat_paths = list(
         pd.read_csv(sumstat_list_path, sep="\t", index_col=0, header=None).values[:, 0]
     )
-    run_ldsc(sumstat_paths, output_path, rerun=rerun, nproc=nproc)
+    run_ldsc_h2(sumstat_paths, output_path, rerun=rerun, nprocs=nprocs)
     ref_bed = pd.read_csv(
         os.path.dirname(__file__)
-        + "/../datasets/ldsc_data/1000G_Phase3_plinkfiles/ref.txt",
+        + "/../../../data/ldsc_data/1000G_Phase3_plinkfiles/ref.txt",
         sep="\t",
         header=None,
     )
@@ -86,80 +37,6 @@ def get_residual(sumstat_list_path, output_path, rerun=False, nproc=10):
         os.path.basename(p).replace(".sumstats", "") for p in sumstat_paths
     ]
     return residuals
-
-
-def get_overlap(snp_df, peak_df):
-    # Convert SNP and peak dataframes to BedTool objects
-    snp_df = snp_df.rename(columns={"CHR": "chrom", "BP": "start"})
-    snp_df.insert(2, "end", snp_df["start"] + 1)
-    snp_df["name"] = range(len(snp_df))
-    snp_df = snp_df.loc[
-        :, ~snp_df.columns.duplicated()
-    ].copy()  # Remove duplicate columns
-
-    snp_bed = pybedtools.BedTool.from_dataframe(
-        snp_df[["chrom", "start", "end", "name"]]
-    )
-    peak_df = peak_df.loc[:, ~peak_df.columns.duplicated()].copy()
-    # If chromosome naming convention is different, adjust here
-    if peak_df["chrom"].astype(str).iloc[0].startswith("chr") and not snp_df[
-        "chrom"
-    ].astype(str).iloc[0].startswith("chr"):
-        peak_df["chrom"] = peak_df["chrom"].apply(lambda x: x.replace("chr", ""))
-    elif not peak_df["chrom"].astype(str).iloc[0].startswith("chr") and snp_df[
-        "chrom"
-    ].astype(str).iloc[0].startswith("chr"):
-        peak_df["chrom"] = peak_df["chrom"].apply(lambda x: "chr" + x)
-    peak_df["name"] = range(len(peak_df))
-    peak_bed = pybedtools.BedTool.from_dataframe(
-        peak_df[["chrom", "start", "end", "name"]]
-    )
-
-    # Perform intersection
-    intersection = snp_bed.intersect(peak_bed, wa=True, wb=True)
-
-    # Parse the intersection results
-    # Initialize a sparse matrix with dimensions (number of peaks, number of SNPs)
-    num_snps = len(snp_df)
-    num_peaks = len(peak_df)
-    overlap_matrix = lil_matrix((num_peaks, num_snps), dtype=int)
-
-    for line in intersection:
-        snp_index = int(line[3])  # Assuming SNP index is in the 4th column
-        peak_index = int(line[7])  # Assuming peak index is in the 7th column
-        overlap_matrix[peak_index, snp_index] = 1
-    if overlap_matrix.sum() == 0:
-        raise ValueError("No overlaps found between SNPs and peaks.")
-    # Calculate the number of SNPs per peak
-    return overlap_matrix
-
-
-def plot_hist(overlap_matrix, logger):
-    snps_per_peak = overlap_matrix.sum(axis=1).A1  # Convert sparse matrix to 1D array
-
-    # Create an ASCII histogram
-    max_count = max(snps_per_peak)
-    bin_width = max(1, max_count // 50)  # Adjust bin width for better visualization
-    zero_count = (snps_per_peak == 0).sum()
-    high_quantile = np.percentile(snps_per_peak, 90)
-    bins = (
-        [0, 1]
-        + list(range(1, int(high_quantile) + bin_width, bin_width))
-        + [max_count + 1]
-    )
-    histogram = np.histogram(snps_per_peak, bins=bins)
-
-    logger.info("ASCII Histogram of SNPs per Peak:")
-    hist_str = ""
-    if zero_count > 0:
-        bar = "#" * (zero_count // max(1, max(histogram[0]) // 50))
-        hist_str += f"          0: {bar}\n"
-    for i in range(1, len(histogram[0])):
-        bar = "#" * (histogram[0][i] // max(1, max(histogram[0]) // 50))
-        if bar == "":
-            continue
-        hist_str += f"{bins[i]:>5} - {bins[i+1]:>5}: {bar}\n"
-    logger.info(hist_str)
 
 
 def get_peak_residual(

@@ -70,8 +70,6 @@ class LightningProxModel(L.LightningModule):
         )
         self.decoder = decoder_class(
             data,
-            n_latent_dims,
-            n_latent_dims,
             device=device,
             edgetype_specific_bias=edgetype_specific_bias,
             edgetype_specific_scale=edgetype_specific_scale,
@@ -338,8 +336,6 @@ class LightningProxModel(L.LightningModule):
             if neg_sample:
                 neg_log_probs = -neg_dist_dict[edge_type].log_prob(
                     torch.tensor(0.0, device=batch[src_type].x.device)
-                    if batch[edge_type].edge_dist != "Beta"
-                    else torch.tensor(1e-6, device=batch[src_type].x.device)
                 )
                 neg_loss = neg_log_probs.sum()
                 loss_dict[edge_type] = pos_loss + neg_loss
@@ -465,6 +461,13 @@ class LightningProxModel(L.LightningModule):
         )
         l = torch.tensor(0.0, device=self.device)
         for edge_type, nll in nll_dict.items():
+            self.log(
+                f"{'train' if self.training else 'val'}_nll_loss/{edge_type}",
+                nll,
+                batch_size=batch[edge_type].edge_index.shape[1],
+                on_step=True,
+                on_epoch=True,
+            )
             if edgetype_loss_weight_dict:
                 edgetype_weight = edgetype_loss_weight_dict[edge_type]
             else:
@@ -474,7 +477,6 @@ class LightningProxModel(L.LightningModule):
 
     def training_step(self, batch, batch_idx):
         t0 = time.time()
-        batch = ToDevice(self.device)(batch)
 
         mu_dict, logstd_dict = self.encode(batch)
 
@@ -576,7 +578,7 @@ class LightningProxModel(L.LightningModule):
             "val_nll_loss",
             batch_nll_loss,
             batch_size=sum([v.shape[1] for v in batch.edge_index_dict.values()]),
-            on_step=False,
+            on_step=True,
             on_epoch=True,
         )
         if self.herit_loss is not None:
@@ -592,7 +594,7 @@ class LightningProxModel(L.LightningModule):
                 "val_herit_loss",
                 herit_loss_value,
                 batch_size=sum([v.shape[1] for v in batch.edge_index_dict.values()]),
-                on_step=False,
+                on_step=True,
                 on_epoch=True,
             )
         else:
@@ -605,7 +607,7 @@ class LightningProxModel(L.LightningModule):
             batch_nll_loss
             + (torch.inf if self.current_epoch < self.n_kl_warmup * 2 else 0),
             batch_size=sum([v.shape[1] for v in batch.edge_index_dict.values()]),
-            on_step=False,
+            on_step=True,
             on_epoch=True,
         )
         self.log(
@@ -619,7 +621,7 @@ class LightningProxModel(L.LightningModule):
             "val_loss",
             loss,
             batch_size=sum([v.shape[1] for v in batch.edge_index_dict.values()]),
-            on_step=False,
+            on_step=True,
             on_epoch=True,
         )
 

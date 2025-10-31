@@ -20,6 +20,7 @@ from simba_plus.evaluation_utils import (
     compute_reconstruction_gene_metrics,
     compute_classification_metrics,
 )
+from simba_plus.utils import setup_logging
 
 ## Evaluate reconstruction quality
 
@@ -273,7 +274,7 @@ def eval(
     data = torch.load(data, weights_only=False)
     data.generate_ids()
     data.to(device)
-    if index_path is not None:
+    if index_path is None:
         index_path = f"{os.path.dirname(model_path)}/data_idx.pkl"
     with open(index_path, "rb") as f:
         data_idx = pkl.load(f)
@@ -385,10 +386,84 @@ def add_argument(parser: ArgumentParser) -> ArgumentParser:
         default="cuda" if torch.cuda.is_available() else "cpu",
         help="Device to run the evaluation on.",
     )
+    parser.add_argument(
+        "--rerun",
+        action="store_true",
+        help="Rerun the evaluation.",
+    )
     return parser
 
 
-def main(args):
+def pretty_print(metric_dict, show_histogram=True, histogram_width=50):
+    """
+    Pretty print metrics dictionary focusing on scalar and array metrics.
+
+    Parameters
+    ----------
+    metric_dict : dict
+        Dictionary containing metrics for different tasks
+    show_histogram : bool, default True
+        Whether to show ASCII histogram for array metrics
+    histogram_width : int, default 50
+        Width of the ASCII histogram
+    """
+    print("=" * 80)
+    print("EVALUATION METRICS SUMMARY")
+    print("=" * 80)
+
+    for task_name, metrics in metric_dict.items():
+        print(f"\n📊 {task_name.upper()} METRICS")
+        print("-" * 60)
+
+        # Separate metrics by type
+        scalar_metrics = {}
+        array_metrics = {}
+
+        for metric_name, value in metrics.items():
+            if metric_name == "pred":
+                continue  # Skip prediction matrices
+            elif isinstance(value, np.ndarray):
+                array_metrics[metric_name] = value
+            else:
+                scalar_metrics[metric_name] = value
+
+        # Print scalar metrics first
+        if scalar_metrics:
+            print("🔢 Scalar Metrics:")
+            for metric_name, value in scalar_metrics.items():
+                if isinstance(value, (np.floating, float)):
+                    print(f"   {metric_name:<30}: {value:.6f}")
+                else:
+                    print(f"   {metric_name:<30}: {value}")
+
+        # Print array metrics with comprehensive statistics
+        if array_metrics:
+            print(f"\n📈 Array Metrics:")
+            for metric_name, array in array_metrics.items():
+                print(f"\n   {metric_name}:")
+                print(f"   {'─' * (len(metric_name) + 3)}")
+
+                # Basic statistics
+                print(f"   Mean:       {np.mean(array):.6f}")
+                print(f"   Std:        {np.std(array):.6f}")
+                print(f"   Min:        {np.min(array):.6f}")
+                print(f"   Max:        {np.max(array):.6f}")
+                print(f"   Median:     {np.median(array):.6f}")
+
+    print("\n" + "=" * 80)
+
+
+def main(args, logger=None):
+    if not logger:
+        logger = setup_logging(
+            "simba+evaluate", log_dir=os.path.dirname(args.model_path)
+        )
+    metric_dict_path = f"{os.path.dirname(args.model_path)}/pred_dict.pkl"
+    if os.path.exists(metric_dict_path):
+        with open(metric_dict_path, "rb") as file:
+            metric_dict = pkl.load(file)
+        pretty_print(metric_dict)
+        return
     metric_dict = eval(
         args.model_path,
         args.data_path,
@@ -397,7 +472,7 @@ def main(args):
         n_negative_samples=args.n_negative_samples,
         device=args.device,
     )
-    print(metric_dict)
+    pretty_print(metric_dict)
     with open(f"{os.path.dirname(args.model_path)}/pred_dict.pkl", "wb") as file:
         pkl.dump(metric_dict, file)
 
