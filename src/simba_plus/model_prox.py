@@ -128,7 +128,7 @@ class AuxParams(nn.Module):
                 )
                 self.bias_dict[dst_std_key] = nn.Parameter(
                     torch.zeros(
-                        data[src].num_nodes,
+                        data[dst].num_nodes,
                     )
                 )
 

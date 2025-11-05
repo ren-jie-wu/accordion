@@ -38,6 +38,8 @@ dependencies = [
     "tqdm",
     "scikit-misc",
     "kneed",
+    "pytest",
+    "pytest-ordering",
 ]
 description = "SIMBA+"
 readme = "README.md"
