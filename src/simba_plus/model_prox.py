@@ -270,29 +270,34 @@ class AuxParams(nn.Module):
                 src_std_key,
                 dst_std_key,
             ) = self.get_keys(src_type, dst_type, edge_type)
-            batches = batch["cell"].batch[edge_index[0]].long()
-            dst_node_id = batch[dst_type].n_id[edge_index[1]]
-            # obtain unique index
+            if self.use_batch:
+                batches = batch["cell"].batch[edge_index[0]].long()
+                dst_node_id = batch[dst_type].n_id[edge_index[1]]
+                # obtain unique index
 
-            sub_idx = torch.where(batches != 0)[0]
-            if len(sub_idx) == 0:
-                continue
-            batches = batches[sub_idx]
-            dst_node_id = dst_node_id[sub_idx]
-            unique_index = torch.unique(torch.stack([batches, dst_node_id]), dim=0)
+                sub_idx = torch.where(batches != 0)[0]
+                if len(sub_idx) == 0:
+                    continue
+                batches = batches[sub_idx]
+                dst_node_id = dst_node_id[sub_idx]
+                unique_index = torch.unique(torch.stack([batches, dst_node_id]), dim=0)
 
-            batches = unique_index[0, :] - 1  # because batch 0 is baseline
-            dst_node_id = unique_index[1, :]
-            weight = node_weights_dict[dst_type][dst_node_id]
-            m_scale = self.scale_dict[dst_scale_key][batches, dst_node_id]
-            logstd_scale = self.scale_logstd_dict[dst_scale_key][batches, dst_node_id]
-            l += self._kl_loss(m_scale, logstd_scale, weight)
-            m_bias = self.bias_dict[dst_bias_key][batches, dst_node_id]
-            logstd_bias = self.bias_logstd_dict[dst_bias_key][batches - 1, dst_node_id]
-            l += self._kl_loss(m_bias, logstd_bias, weight)
-            m_std = self.std_dict[dst_std_key][batches, dst_node_id]
-            logstd_std = self.std_logstd_dict[dst_std_key][batches - 1, dst_node_id]
-            l += self._kl_loss(m_std, logstd_std, weight)
+                batches = unique_index[0, :] - 1  # because batch 0 is baseline
+                dst_node_id = unique_index[1, :]
+                weight = node_weights_dict[dst_type][dst_node_id]
+                m_scale = self.scale_dict[dst_scale_key][batches, dst_node_id]
+                logstd_scale = self.scale_logstd_dict[dst_scale_key][
+                    batches, dst_node_id
+                ]
+                l += self._kl_loss(m_scale, logstd_scale, weight)
+                m_bias = self.bias_dict[dst_bias_key][batches, dst_node_id]
+                logstd_bias = self.bias_logstd_dict[dst_bias_key][
+                    batches - 1, dst_node_id
+                ]
+                l += self._kl_loss(m_bias, logstd_bias, weight)
+                m_std = self.std_dict[dst_std_key][batches, dst_node_id]
+                logstd_std = self.std_logstd_dict[dst_std_key][batches - 1, dst_node_id]
+                l += self._kl_loss(m_std, logstd_std, weight)
         return l
 
 

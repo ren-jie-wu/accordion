@@ -71,8 +71,8 @@ def _make_tensor(data: HeteroData, device="cpu"):
     data.apply(
         lambda x: (
             torch.tensor(x).to(device)
-            if isinstance(x, np.ndarray) or isinstance(x, torch.Tensor)
-            else x
+            if isinstance(x, np.ndarray)
+            else x.clone().detach()
         )
     )
 
