@@ -74,6 +74,31 @@ def setup_logging(checkpoint_dir):
     return logger
 
 
+def get_run_id(
+    batch_size: int = 1_000_000,
+    n_batch_sampling: int = 1,
+    data_path: str = None,
+    hidden_dims: int = 50,
+    hsic_lam: float = 0.0,
+    edgetype_specific: bool = True,
+    nonneg: bool = False,
+    pos_scale: bool = False,
+    scale_src: bool = True,
+    sumstats: Optional[str] = None,
+    sumstats_lam: float = 1.0,
+    **kwargs,
+):
+    if pos_scale and scale_src:
+        scale_tag = ".ps"
+    elif pos_scale:
+        scale_tag = ".pd"
+    elif scale_src:
+        scale_tag = ".d"
+    else:
+        scale_tag = ""
+    return f"simba+{os.path.basename(data_path).split('_HetData.dat')[0]}_{human_format(batch_size)}{'x'+str(n_batch_sampling) if n_batch_sampling > 1 else ''}{'.indep2_' + format(hsic_lam, '1.0e') if hsic_lam != 0 else ''}{os.path.basename(sumstats).split('.txt')[0] if sumstats is not None else ''}{'_'+format(sumstats_lam, '1.0e') if sumstats is not None and sumstats_lam != 1.0 else ''}{'.d' + str(hidden_dims) if hidden_dims != 50 else ''}{'.en' if not edgetype_specific else ''}{'.nn' if nonneg else ''}{scale_tag}.randinit"
+
+
 def run(
     batch_size: int = 1_000_000,
     n_batch_sampling: int = 1,
@@ -82,7 +107,6 @@ def run(
     load_checkpoint: bool = False,
     checkpoint_suffix: str = "",
     num_workers: int = 30,
-    reweight_rarecell: bool = False,
     n_no_kl: int = 0,
     n_kl_warmup: int = 1,
     hidden_dims: int = 50,
@@ -106,16 +130,20 @@ def run(
     ----------
 
     """
-    if pos_scale and scale_src:
-        scale_tag = ".ps"
-    elif pos_scale:
-        scale_tag = ".pd"
-    elif scale_src:
-        scale_tag = ".d"
-    else:
-        scale_tag = ""
-    run_id = f"simba+{os.path.basename(data_path).split('_HetData.dat')[0]}_{human_format(batch_size)}{'x'+str(n_batch_sampling) if n_batch_sampling > 1 else ''}{'.indep2_' + format(hsic_lam, '1.0e') if hsic_lam != 0 else ''}{os.path.basename(sumstats).split('.txt')[0] if sumstats is not None else ''}{'_'+format(sumstats_lam, '1.0e') if sumstats is not None and sumstats_lam != 1.0 else ''}{'.d' + str(hidden_dims) if hidden_dims != 50 else ''}{'.en' if not edgetype_specific else ''}{'.nn' if nonneg else ''}{scale_tag}.randinit"
 
+    run_id = get_run_id(
+        batch_size=batch_size,
+        n_batch_sampling=n_batch_sampling,
+        data_path=data_path,
+        hidden_dims=hidden_dims,
+        hsic_lam=hsic_lam,
+        edgetype_specific=edgetype_specific,
+        nonneg=nonneg,
+        pos_scale=pos_scale,
+        scale_src=scale_src,
+        sumstats=sumstats,
+        sumstats_lam=sumstats_lam,
+    )
     prefix = f"{output_dir}/"
     checkpoint_dir = f"{prefix}/{run_id}.checkpoints/"
     logger = setup_logging(checkpoint_dir)
@@ -422,14 +450,17 @@ def save_files(
     )
 
 
-def check_args(args):
-    if args.sumstats is not None:
-        if not os.path.exists(args.sumstats):
-            raise ValueError(
-                f"Summary statistics file --sumstats {args.sumstats} not found."
-            )
-        if args.adata_CP is None:
-            raise ValueError("--adata-CP must be provided when using --sumstats.")
+def eval_run(args):
+    data_idx_path = f"{args.data_path.split(".dat")[0]}_data_idx.pkl"
+    model_path = f"{get_run_id()}.checkpoints/last{checkpoint_suffix}.ckpt"
+    metric_dict = eval(
+        model_path,
+        args.data_path,
+        data_idx_path,
+        args.batch_size,
+        args.n_negative_samples,
+        device=args.device,
+    )
 
 
 def main(args):
@@ -444,7 +475,8 @@ def main(args):
             nprocs=args.num_workers,
         )
         kwargs["ldsc_res"] = residuals
-    run(**kwargs)
+    model_path = run(**kwargs)
+    metric_dict = eval_run(model_path, args)
 
 
 def add_argument(parser):
@@ -540,6 +572,16 @@ def add_argument(parser):
         help="Number of max epochs for training",
     )
     return parser
+
+
+def check_args(args):
+    if args.sumstats is not None:
+        if not os.path.exists(args.sumstats):
+            raise ValueError(
+                f"Summary statistics file --sumstats {args.sumstats} not found."
+            )
+        if args.adata_CP is None:
+            raise ValueError("--adata-CP must be provided when using --sumstats.")
 
 
 if __name__ == "__main__":

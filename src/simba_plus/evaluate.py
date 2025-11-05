@@ -477,5 +477,6 @@ def main(args, logger=None):
 
 if __name__ == "__main__":
     parser = ArgumentParser()
+    parser = add_argument(parser)
     args = parser.parse_args()
     main(args)
