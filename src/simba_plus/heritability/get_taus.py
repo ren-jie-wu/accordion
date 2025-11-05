@@ -44,7 +44,7 @@ def get_corr(cov_mat):
 def get_tau_z_dep(
     result_path,
     mat,
-    n_annot=d,
+    n_annot,
     plot_cov=False,
     std_mat=None,
     n_mat_samples=100,
