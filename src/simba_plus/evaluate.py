@@ -1,5 +1,6 @@
 from typing import Dict, Optional
 import os
+from functools import partial
 from typing import Literal
 import pickle as pkl
 from argparse import ArgumentParser
@@ -14,7 +15,7 @@ from torch_geometric.utils import negative_sampling, to_dense_adj
 from torch_geometric.typing import EdgeType
 
 from tqdm import tqdm
-from simba_plus.loader import CustomIndexDataset
+from simba_plus.loader import CustomMultiIndexDataset
 from simba_plus.model_prox import LightningProxModel
 from simba_plus.evaluation_utils import (
     compute_reconstruction_gene_metrics,
@@ -89,6 +90,7 @@ def get_gexp_metrics(
     batch_size: Optional[int] = None,
     n_negative_samples: Optional[int] = None,
     device: str = "cpu",
+    num_workers: int = 2,
 ):
     if batch_size is None:
         batch_size = int(1e6)
@@ -101,16 +103,15 @@ def get_gexp_metrics(
     )
     gexp_mean = gexp_mat.mean(axis=0)
     gexp_norm = gexp_mat / (gexp_mean + 1e-6)
-    gexp_dataset = CustomIndexDataset(
-        ("cell", "expresses", "gene"),
-        torch.arange(eval_data["cell", "expresses", "gene"].num_edges),
+    gexp_dataset = CustomMultiIndexDataset(
+        [("cell", "expresses", "gene")],
+        [eval_data["cell", "expresses", "gene"].edge_index],
     )
     gexp_loader = DataLoader(
         gexp_dataset,
         batch_size=batch_size,
-        collate_fn=collate,
-        shuffle=False,
-        pin_memory_device=device,
+        collate_fn=partial(collate, data=eval_data),
+        num_workers=num_workers,
     )
     with torch.no_grad():
         model.eval()
@@ -180,18 +181,19 @@ def get_accessibility_metrics(
     batch_size: Optional[int] = None,
     n_negative_samples: Optional[int] = None,
     device: str = "cpu",
+    num_workers: int = 2,
 ):
     if batch_size is None:
         batch_size = int(1e6)
+    acc_dataset = CustomMultiIndexDataset(
+        [("cell", "has_accessible", "peak")],
+        [eval_data["cell", "has_accessible", "peak"].edge_index],
+    )
     acc_loader = DataLoader(
-        CustomIndexDataset(
-            ("cell", "has_accessible", "peak"),
-            torch.arange(eval_data["cell", "has_accessible", "peak"].num_edges),
-        ),
+        acc_dataset,
         batch_size=batch_size,
-        collate_fn=collate,
-        shuffle=False,
-        pin_memory_device=device,
+        collate_fn=partial(collate, data=eval_data),
+        num_workers=num_workers,
     )
     with torch.no_grad():
         model.eval()
@@ -324,10 +326,6 @@ def eval(
         }
         print(train_index)
 
-    possible_edge_types = [
-        ("cell", "has_accessible", "peak"),
-        ("cell", "expresses", "gene"),
-    ]
     if ("cell", "expresses", "gene") in eval_data.edge_types:
         metric_dict["gexp"] = get_gexp_metrics(
             model,

@@ -87,9 +87,7 @@ def run(
     n_kl_warmup: int = 1,
     hidden_dims: int = 50,
     hsic_lam: float = 0.0,
-    edgetype_specific_scale: bool = True,
-    edgetype_specific_std: bool = True,
-    edgetype_specific_bias: bool = True,
+    edgetype_specific: bool = True,
     nonneg: bool = False,
     adata_CG: str = None,
     adata_CP: str = None,
@@ -115,7 +113,7 @@ def run(
         scale_tag = ".d"
     else:
         scale_tag = ""
-    run_id = f"pl_{os.path.basename(data_path).split('_HetData.dat')[0]}_{human_format(batch_size)}{'x'+str(n_batch_sampling) if n_batch_sampling > 1 else ''}{'.indep2_' + format(hsic_lam, '1.0e') if hsic_lam != 0 else ''}{os.path.basename(sumstats).split('.txt')[0] if sumstats is not None else ''}{'_'+format(sumstats_lam, '1.0e') if sumstats is not None and sumstats_lam != 1.0 else ''}{'.d' + str(hidden_dims) if hidden_dims != 50 else ''}{'.enss' if not edgetype_specific_scale else ''}{'.enst' if not edgetype_specific_std else ''}{'.ensb' if not edgetype_specific_bias else ''}{'.nn' if nonneg else ''}{scale_tag}.randinit"
+    run_id = f"pl_{os.path.basename(data_path).split('_HetData.dat')[0]}_{human_format(batch_size)}{'x'+str(n_batch_sampling) if n_batch_sampling > 1 else ''}{'.indep2_' + format(hsic_lam, '1.0e') if hsic_lam != 0 else ''}{os.path.basename(sumstats).split('.txt')[0] if sumstats is not None else ''}{'_'+format(sumstats_lam, '1.0e') if sumstats is not None and sumstats_lam != 1.0 else ''}{'.d' + str(hidden_dims) if hidden_dims != 50 else ''}{'.en' if not edgetype_specific else ''}{'.nn' if nonneg else ''}{scale_tag}.randinit"
 
     prefix = f"{output_dir}/"
     checkpoint_dir = f"{prefix}/{run_id}.checkpoints/"
@@ -139,6 +137,7 @@ def run(
             cell_adata=adata_CG,
             peak_adata=adata_CP,
             checkpoint_suffix=checkpoint_suffix,
+            logger=logger,
         )
         return
 
@@ -206,9 +205,7 @@ def run(
         n_latent_dims=dim_u,
         device=device,
         num_neg_samples_fold=num_neg_samples_fold,
-        edgetype_specific_scale=edgetype_specific_scale,
-        edgetype_specific_std=edgetype_specific_std,
-        edgetype_specific_bias=edgetype_specific_bias,
+        edgetype_specific=edgetype_specific,
         hsic=hsic,
         herit_loss=herit_loss,
         n_no_kl=n_no_kl,
@@ -240,9 +237,7 @@ def run(
                 "early_stopping_steps": early_stopping_steps,
                 "HSIC_loss": hsic_lam,
                 "num_neg_samples_fold": num_neg_samples_fold,
-                "edgetype_specific_bias": edgetype_specific_bias,
-                "edgetype_specific_scale": edgetype_specific_scale,
-                "edgetype_specific_std": edgetype_specific_std,
+                "edgetype_specific": edgetype_specific,
             }
         )
         early_stopping_callback = MyEarlyStopping(
@@ -283,6 +278,7 @@ def run(
                 early_stop_threshold=None,
             )
             logger.info(f"@TRAIN: LR={rpvgae.learning_rate}")
+        trainer.validate(rpvgae, datamodule=pldata)
         trainer.fit(
             model=rpvgae,
             datamodule=pldata,
@@ -292,13 +288,20 @@ def run(
                 else None
             ),
         )
+        return checkpoint_callback.last_model_path
 
-    train(
+    last_model_path = train(
         rpvgae,
         run_id=run_id,
     )
     torch.save(rpvgae.state_dict(), f"{prefix}{run_id}.model")
-    save_files(f"{prefix}{run_id}", cell_adata=adata_CG, peak_adata=adata_CP)
+    save_files(
+        f"{prefix}{run_id}",
+        last_model_path,
+        cell_adata=adata_CG,
+        peak_adata=adata_CP,
+        logger=logger,
+    )
 
 
 def human_format(num):
@@ -312,50 +315,70 @@ def human_format(num):
 
 def save_files(
     run_id: str,
+    last_model_path: str = None,
     cell_adata: str = None,
     peak_adata: str = None,
     checkpoint_suffix: str = "",
+    logger=None,
 ):
     adata_CG = ad.read_h5ad(cell_adata) if cell_adata is not None else None
     adata_CP = ad.read_h5ad(peak_adata) if peak_adata is not None else None
+    if last_model_path is None:
+        last_model_path = f"{run_id}.checkpoints/last{checkpoint_suffix}.ckpt"
+    else:
+        checkpoint_suffix = (
+            os.path.basename(last_model_path).split("last")[1].split(".ckpt")[0]
+        )
+    logger.info(
+        f"Saving model outputs from checkpoint {last_model_path} into into AnnDatas..."
+    )
     model = LightningProxModel.load_from_checkpoint(
-        f"{run_id}.checkpoints/last{checkpoint_suffix}.ckpt",
+        last_model_path,
         weights_only=True,
         map_location="cpu",
     )
+
     if "peak" in model.encoder.__mu_dict__:
         np.save(
             f"{run_id}.checkpoints/peak_scale.npy",
-            model.scale_dict["peak__cell_has_accessible_peak"].detach().numpy(),
+            model.aux_params.scale_dict["peak__cell_has_accessible_peak"]
+            .detach()
+            .numpy(),
         )
         np.save(
             f"{run_id}.checkpoints/peak_bias.npy",
-            model.bias_dict["peak__cell_has_accessible_peak"].detach().numpy(),
+            model.aux_params.bias_dict["peak__cell_has_accessible_peak"]
+            .detach()
+            .numpy(),
         )
         np.save(
             f"{run_id}.checkpoints/cell_peak_scale.npy",
-            model.scale_dict["cell__cell_has_accessible_peak"].detach().numpy(),
+            model.aux_params.scale_dict["cell__cell_has_accessible_peak"]
+            .detach()
+            .numpy(),
         )
         np.save(
             f"{run_id}.checkpoints/cell_peak_bias.npy",
-            model.bias_dict["cell__cell_has_accessible_peak"].detach().numpy(),
+            model.aux_params.bias_dict["cell__cell_has_accessible_peak"]
+            .detach()
+            .numpy(),
         )
     if "gene" in model.encoder.__mu_dict__:
         np.save(
             f"{run_id}.checkpoints/gene_scale.npy",
-            model.scale_dict["gene__cell_expresses_gene"].detach().numpy(),
+            model.aux_params.scale_dict["gene__cell_expresses_gene"].detach().numpy(),
         )
         np.save(
             f"{run_id}.checkpoints/gene_bias.npy",
-            model.bias_dict["gene__cell_expresses_gene"].detach().numpy(),
+            model.aux_params.bias_dict["gene__cell_expresses_gene"].detach().numpy(),
         )
         np.save(
             f"{run_id}.checkpoints/cell_gene_scale.npy",
-            model.scale_dict["cell__cell_expresses_gene"].detach().numpy(),
+            model.aux_params.scale_dict["cell__cell_expresses_gene"].detach().numpy(),
         )
         np.save(
             f"{run_id}.checkpoints/cell_gene_bias.npy",
-            model.bias_dict["cell__cell_expresses_gene"].detach().numpy(),
+            model.aux_params.bias_dict["cell__cell_expresses_gene"].detach().numpy(),
         )
     cell_x = model.encoder.__mu_dict__["cell"].detach().cpu()
     obs_use = None
@@ -389,9 +412,12 @@ def save_files(
             },
             obs=adata_CG.var if adata_CG is not None else None,
         )
-        adata_G.write(f"{run_id}.checkpoints/adata_G.h5ad")
-    adata_C.write(f"{run_id}.checkpoints/adata_C.h5ad")
-    adata_P.write(f"{run_id}.checkpoints/adata_P.h5ad")
+        adata_G.write(f"{run_id}.checkpoints/adata_G{checkpoint_suffix}.h5ad")
+    adata_C.write(f"{run_id}.checkpoints/adata_C{checkpoint_suffix}.h5ad")
+    adata_P.write(f"{run_id}.checkpoints/adata_P{checkpoint_suffix}.h5ad")
+    logger.info(
+        f"Saved AnnDatas into {run_id}.checkpoints/adata_{{C,P,G}}{checkpoint_suffix}.h5ad"
+    )
 
 
 def check_args(args):
@@ -502,7 +528,7 @@ def add_argument(parser):
     parser.add_argument(
         "--early-stopping-steps",
         type=int,
-        default=3,
+        default=5,
         help="Number of epoch for early stopping patience",
     )
     return parser

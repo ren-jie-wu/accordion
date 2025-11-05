@@ -1,6 +1,7 @@
 import torch
 from torch.utils.data import Dataset
 from torch_geometric.typing import EdgeType
+from torch_geometric.transforms.remove_isolated_nodes import RemoveIsolatedNodes
 
 
 class CustomIndexDataset(Dataset):
@@ -60,3 +61,16 @@ class CustomMultiIndexDataset(Dataset):
         res = self.edge_attr_types[type_idx], self.indexes[type_idx][sample_idx]
         self.type_idxs[type_idx] += 1
         return res
+
+
+def collate(idx, data):
+    batch = {}
+    for d in idx:
+        if d[0] not in batch:
+            batch[d[0]] = [d[1]]
+        else:
+            batch[d[0]].append(d[1])
+    # return {k: torch.tensor(v) for k, v in batch.items()}
+    return RemoveIsolatedNodes()(
+        data.edge_subgraph({k: torch.tensor(v) for k, v in batch.items()})
+    )

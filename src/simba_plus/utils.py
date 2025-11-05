@@ -1,6 +1,7 @@
 from typing import Optional, List
 import numpy as np
 import torch
+from functools import partial
 from tqdm import tqdm
 from torch.utils.data import DataLoader
 from torch_geometric.data import HeteroData
@@ -11,7 +12,7 @@ import lightning as L
 from lightning.pytorch.callbacks.early_stopping import EarlyStopping
 import os
 import pickle as pkl
-from simba_plus.loader import CustomMultiIndexDataset
+from simba_plus.loader import CustomMultiIndexDataset, collate
 import logging
 import sys
 from pathlib import Path
@@ -236,23 +237,13 @@ def get_edge_split_datamodule(
 
 
 def get_dataloader(train_data, val_data, data, batch_size, num_workers: int = 30):
-    def collate(idx, data=data):
-        batch = {}
-        for d in idx:
-            if d[0] not in batch:
-                batch[d[0]] = [d[1]]
-            else:
-                batch[d[0]].append(d[1])
-        # return {k: torch.tensor(v) for k, v in batch.items()}
-        return RemoveIsolatedNodes()(
-            data.edge_subgraph({k: torch.tensor(v) for k, v in batch.items()})
-        )
+    collate_ = partial(collate, data=data)
 
     train_loader = DataLoader(
-        train_data, batch_size=batch_size, collate_fn=collate, num_workers=num_workers
+        train_data, batch_size=batch_size, collate_fn=collate_, num_workers=num_workers
     )
     val_loader = DataLoader(
-        val_data, batch_size=batch_size, collate_fn=collate, num_workers=num_workers
+        val_data, batch_size=batch_size, collate_fn=collate_, num_workers=num_workers
     )
     return train_loader, val_loader
 
