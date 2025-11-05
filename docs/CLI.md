@@ -29,7 +29,8 @@ options:
 ```
 usage: simba+ train [-h] [--adata-CG ADATA_CG] [--adata-CP ADATA_CP]
                     [--batch-size BATCH_SIZE] [--output-dir OUTPUT_DIR]
-                    [--sumstats SUMSTATS] [--load-checkpoint]
+                    [--sumstats SUMSTATS] [--sumstats-lam SUMSTATS_LAM]
+                    [--load-checkpoint]
                     [--checkpoint-suffix CHECKPOINT_SUFFIX]
                     [--hidden-dims HIDDEN_DIMS] [--hsic-lam HSIC_LAM]
                     [--get-adata] [--pos-scale] [--num-workers NUM_WORKERS]
@@ -59,6 +60,9 @@ options:
                         of summary statistics. Provide a TSV file with one
                         trait name and path to summary statistics file per
                         line.
+  --sumstats-lam SUMSTATS_LAM
+                        If provided with `sumstats`, weights the MSE loss for
+                        sumstat residuals.
   --load-checkpoint     If set, resume training from the last checkpoint
   --checkpoint-suffix CHECKPOINT_SUFFIX
                         Append a suffix to checkpoint filenames
@@ -71,7 +75,7 @@ options:
   --pos-scale           Use positive-only scaling for the mean of output
                         distributions
   --num-workers NUM_WORKERS
-                        Number of worker processes for data loading
+                        Number of worker processes for data loading and LDSC
   --early-stopping-steps EARLY_STOPPING_STEPS
                         Number of epoch for early stopping patience
 ```
@@ -81,6 +85,7 @@ options:
 ```
 usage: simba+ eval [-h] [--idx-path IDX_PATH] [--batch-size BATCH_SIZE]
                    [--n-negative-samples N_NEGATIVE_SAMPLES] [--device DEVICE]
+                   [--rerun]
                    data_path model_path
 
 Evaluate the Simba+ model on a given dataset.
@@ -97,5 +102,6 @@ options:
   --n-negative-samples N_NEGATIVE_SAMPLES
                         Number of negative samples for evaluation.
   --device DEVICE       Device to run the evaluation on.
+  --rerun               Rerun the evaluation.
 ```
 
