@@ -383,7 +383,7 @@ def setup_logging(
     logger.propagate = False
 
     # Print ASCII art banner when logger starts
-    ascii_art = """
+    ascii_art = r"""
                     _           _                 
   ⣀⣤⣶⣶⣤⣀         (_)         | |            _   
 ⣴⣿⡿⠛⠉⠉⠛⢿⣤    ___ _ _ __ ___ | |__   __ _ _| |_ 
