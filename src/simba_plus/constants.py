@@ -1,0 +1,3 @@
+MIN_LOGSTD = -10
+MAX_LOGSTD = 10
+EPS = 1e-6
