@@ -84,21 +84,11 @@ def get_run_id(
     hsic_lam: float = 0.0,
     edgetype_specific: bool = True,
     nonneg: bool = False,
-    pos_scale: bool = False,
-    scale_src: bool = True,
     sumstats: Optional[str] = None,
     sumstats_lam: float = 1.0,
     **kwargs,
 ):
-    if pos_scale and scale_src:
-        scale_tag = ".ps"
-    elif pos_scale:
-        scale_tag = ".pd"
-    elif scale_src:
-        scale_tag = ".d"
-    else:
-        scale_tag = ""
-    return f"simba+{os.path.basename(data_path).split('_HetData.dat')[0]}_{human_format(batch_size)}{'x'+str(n_batch_sampling) if n_batch_sampling > 1 else ''}{'.indep2_' + format(hsic_lam, '1.0e') if hsic_lam != 0 else ''}{os.path.basename(sumstats).split('.txt')[0] if sumstats is not None else ''}{'_'+format(sumstats_lam, '1.0e') if sumstats is not None and sumstats_lam != 1.0 else ''}{'.d' + str(hidden_dims) if hidden_dims != 50 else ''}{'.en' if not edgetype_specific else ''}{'.nn' if nonneg else ''}{scale_tag}.randinit"
+    return f"simba+{os.path.basename(data_path).split('_HetData.dat')[0]}_{human_format(batch_size)}{'x'+str(n_batch_sampling) if n_batch_sampling > 1 else ''}{'.indep2_' + format(hsic_lam, '1.0e') if hsic_lam != 0 else ''}{os.path.basename(sumstats).split('.txt')[0] if sumstats is not None else ''}{'_'+format(sumstats_lam, '1.0e') if sumstats is not None and sumstats_lam != 1.0 else ''}{'.d' + str(hidden_dims) if hidden_dims != 50 else ''}{'.en' if not edgetype_specific else ''}{'.nn' if nonneg else ''}.randinit"
 
 
 def run(
@@ -118,8 +108,6 @@ def run(
     adata_CG: str = None,
     adata_CP: str = None,
     get_adata: bool = False,
-    pos_scale: bool = False,
-    scale_src: bool = True,
     ldsc_res: Optional[pd.DataFrame] = None,
     sumstats: Optional[str] = None,
     sumstats_lam: float = 1.0,
@@ -141,8 +129,6 @@ def run(
         hsic_lam=hsic_lam,
         edgetype_specific=edgetype_specific,
         nonneg=nonneg,
-        pos_scale=pos_scale,
-        scale_src=scale_src,
         sumstats=sumstats,
         sumstats_lam=sumstats_lam,
     )
@@ -245,8 +231,6 @@ def run(
         val_nll_scale=val_nll_scale,
         node_weights_dict=node_weights_dict,
         nonneg=nonneg,
-        positive_scale=pos_scale,
-        decoder_scale_src=scale_src,
     ).to(device)
 
     def train(
@@ -552,11 +536,6 @@ def add_argument(parser):
         "--get-adata",
         action="store_true",
         help="Only extract and save AnnData outputs from the last checkpoint and exit",
-    )
-    parser.add_argument(
-        "--pos-scale",
-        action="store_true",
-        help="Use positive-only scaling for the mean of output distributions",
     )
     parser.add_argument(
         "--num-workers",

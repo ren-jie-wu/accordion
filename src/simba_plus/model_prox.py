@@ -323,8 +323,6 @@ class LightningProxModel(L.LightningModule):
         nonneg=False,
         reweight_rarecell: bool = False,
         reweight_rarecell_neighbors: Optional[int] = None,
-        positive_scale: bool = False,
-        decoder_scale_src: bool = True,
     ):
         super().__init__()
         self.save_hyperparameters()
@@ -339,8 +337,6 @@ class LightningProxModel(L.LightningModule):
         self.decoder = decoder_class(
             data,
             device=device,
-            positive_scale=positive_scale,
-            decoder_scale_src=decoder_scale_src,
         )
         self.hsic = hsic
         if self.hsic is not None:

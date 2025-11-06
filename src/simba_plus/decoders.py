@@ -44,8 +44,6 @@ class RelationalEdgeDistributionDecoder(torch.nn.Module):
         self,
         data: HeteroData,
         device="cpu",
-        positive_scale: bool = False,
-        decoder_scale_src: bool = True,
     ) -> None:
         """Initialize the decoder with shared projection matrix per relation type.
         See https://pytorch-geometric.readthedocs.io/en/latest/_modules/torch_geometric/nn/conv/hgt_conv.html#HGTConv
@@ -62,10 +60,7 @@ class RelationalEdgeDistributionDecoder(torch.nn.Module):
             if edge_type in data.edge_dist_dict.keys():
                 self.prob_dict[",".join(edge_type)] = _DECODER_MAP[
                     data.edge_dist_dict[edge_type]
-                ](
-                    positive_scale=positive_scale,
-                    scale_src=decoder_scale_src,
-                )
+                ]()
 
     def forward(
         self,
