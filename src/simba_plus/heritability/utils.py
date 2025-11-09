@@ -22,6 +22,8 @@ def get_overlap(snp_df, peak_df):
         snp_df[["chrom", "start", "end", "name"]]
     )
     peak_df = peak_df.loc[:, ~peak_df.columns.duplicated()].copy()
+    if "chr" in peak_df.columns and "chrom" not in peak_df.columns:
+        peak_df = peak_df.rename(columns={"chr": "chrom"})
     # If chromosome naming convention is different, adjust here
     if peak_df["chrom"].astype(str).iloc[0].startswith("chr") and not snp_df[
         "chrom"
@@ -71,7 +73,7 @@ def plot_hist(overlap_matrix, logger):
     histogram = np.histogram(snps_per_peak, bins=bins)
 
     logger.info("ASCII Histogram of SNPs per Peak:")
-    hist_str = ""
+    hist_str = "\n"
     if zero_count > 0:
         bar = "#" * (zero_count // max(1, max(histogram[0]) // 50))
         hist_str += f"          0: {bar}\n"

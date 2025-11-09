@@ -99,7 +99,7 @@ def run(
     load_checkpoint: bool = False,
     checkpoint_suffix: str = "",
     num_workers: int = 30,
-    n_no_kl: int = 0,
+    n_no_kl: int = 10,
     n_kl_warmup: int = 1,
     hidden_dims: int = 50,
     hsic_lam: float = 0.0,
@@ -111,7 +111,7 @@ def run(
     ldsc_res: Optional[pd.DataFrame] = None,
     sumstats: Optional[str] = None,
     sumstats_lam: float = 1.0,
-    early_stopping_steps: int = 3,
+    early_stopping_steps: int = 10,
     max_epochs: int = 1000,
 ):
     """Train the model with the given parameters.
@@ -141,6 +141,9 @@ def run(
     logger.info(f"Using {device} as device...")
     # torch.set_default_device(device)
     data = simba_plus.load_data.load_from_path(data_path)
+    data.generate_ids()
+    print(data["cell"].n_id)
+    print(data["gene"].n_id)
     logger.info(f"Data loaded to {data['cell'].x.device}: {data}")
     dim_u = hidden_dims
     num_neg_samples_fold = 1
@@ -256,14 +259,14 @@ def run(
             }
         )
         early_stopping_callback = MyEarlyStopping(
-            monitor="val_loss",
+            monitor="val_nll_loss",
             mode="min",
             strict=True,
             patience=early_stopping_steps,
         )
         checkpoint_callback = ModelCheckpoint(
             checkpoint_dir,
-            monitor="val_loss",
+            monitor=None,
             mode="min",
             save_last=True,
         )
@@ -285,14 +288,16 @@ def run(
         )
         if not load_checkpoint:
             tuner = Tuner(trainer)
-            tuner.lr_find(
-                rpvgae,
-                pldata,
-                # min_lr=1e-5,
-                max_lr=0.01,
-                num_training=30,
-                early_stop_threshold=None,
-            )
+            # tuner.lr_find(
+            #     rpvgae,
+            #     pldata,
+            #     min_lr=0.001,
+            #     max_lr=0.01,
+            #     num_training=30,
+            #     early_stop_threshold=None,
+            # )
+            rpvgae.learning_rate = 0.1
+
             logger.info(f"@TRAIN: LR={rpvgae.learning_rate}")
         trainer.validate(rpvgae, datamodule=pldata)
         trainer.fit(
@@ -320,10 +325,10 @@ def run(
     )
 
     def run_eval():
-        data_idx_path = f"{data_path.split(".dat")[0]}_data_idx.pkl"
+        data_idx_path = f"{data_path.split('.dat')[0]}_data_idx.pkl"
         metric_dict = eval(
             model_path=last_model_path,
-            data=data_path,
+            data_path=data_path,
             index_path=data_idx_path,
             batch_size=batch_size,
             device=device,
@@ -373,8 +378,8 @@ def save_files(
 
     if "peak" in model.encoder.__mu_dict__:
         np.save(
-            f"{run_id}.checkpoints/peak_scale.npy",
-            model.aux_params.scale_dict["peak__cell_has_accessible_peak"]
+            f"{run_id}.checkpoints/peak_logscale.npy",
+            model.aux_params.logscale_dict["peak__cell_has_accessible_peak"]
             .detach()
             .numpy(),
         )
@@ -385,8 +390,8 @@ def save_files(
             .numpy(),
         )
         np.save(
-            f"{run_id}.checkpoints/cell_peak_scale.npy",
-            model.aux_params.scale_dict["cell__cell_has_accessible_peak"]
+            f"{run_id}.checkpoints/cell_peak_logscale.npy",
+            model.aux_params.logscale_dict["cell__cell_has_accessible_peak"]
             .detach()
             .numpy(),
         )
@@ -398,16 +403,20 @@ def save_files(
         )
     if "gene" in model.encoder.__mu_dict__:
         np.save(
-            f"{run_id}.checkpoints/gene_scale.npy",
-            model.aux_params.scale_dict["gene__cell_expresses_gene"].detach().numpy(),
+            f"{run_id}.checkpoints/gene_logscale.npy",
+            model.aux_params.logscale_dict["gene__cell_expresses_gene"]
+            .detach()
+            .numpy(),
         )
         np.save(
             f"{run_id}.checkpoints/gene_bias.npy",
             model.aux_params.bias_dict["gene__cell_expresses_gene"].detach().numpy(),
         )
         np.save(
-            f"{run_id}.checkpoints/cell_gene_scale.npy",
-            model.aux_params.scale_dict["cell__cell_expresses_gene"].detach().numpy(),
+            f"{run_id}.checkpoints/cell_gene_logscale.npy",
+            model.aux_params.logscale_dict["cell__cell_expresses_gene"]
+            .detach()
+            .numpy(),
         )
         np.save(
             f"{run_id}.checkpoints/cell_gene_bias.npy",
@@ -429,14 +438,15 @@ def save_files(
     )
     sc.pp.neighbors(adata_C)
     sc.tl.umap(adata_C, random_state=2025)
-
-    adata_P = ad.AnnData(
-        X=model.encoder.__mu_dict__["peak"].detach().cpu().numpy(),
-        layers={
-            "X_logstd": model.encoder.__logstd_dict__["peak"].detach().cpu().numpy()
-        },
-        obs=adata_CP.var if adata_CP is not None else None,
-    )
+    if "peak" in model.encoder.__mu_dict__:
+        adata_P = ad.AnnData(
+            X=model.encoder.__mu_dict__["peak"].detach().cpu().numpy(),
+            layers={
+                "X_logstd": model.encoder.__logstd_dict__["peak"].detach().cpu().numpy()
+            },
+            obs=adata_CP.var if adata_CP is not None else None,
+        )
+        adata_P.write(f"{run_id}.checkpoints/adata_P{checkpoint_suffix}.h5ad")
     if "gene" in model.encoder.__mu_dict__:
         adata_G = ad.AnnData(
             X=model.encoder.__mu_dict__["gene"].detach().cpu().numpy(),
@@ -447,7 +457,7 @@ def save_files(
         )
         adata_G.write(f"{run_id}.checkpoints/adata_G{checkpoint_suffix}.h5ad")
     adata_C.write(f"{run_id}.checkpoints/adata_C{checkpoint_suffix}.h5ad")
-    adata_P.write(f"{run_id}.checkpoints/adata_P{checkpoint_suffix}.h5ad")
+
     logger.info(
         f"Saved AnnDatas into {run_id}.checkpoints/adata_{{C,P,G}}{checkpoint_suffix}.h5ad"
     )
@@ -546,13 +556,13 @@ def add_argument(parser):
     parser.add_argument(
         "--early-stopping-steps",
         type=int,
-        default=5,
+        default=10,
         help="Number of epoch for early stopping patience",
     )
     parser.add_argument(
         "--max-epochs",
         type=int,
-        default=100,
+        default=1000,
         help="Number of max epochs for training",
     )
     return parser

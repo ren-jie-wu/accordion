@@ -44,10 +44,6 @@ def get_corr(cov_mat):
 def get_tau_z_dep(
     result_path,
     mat,
-    n_annot,
-    plot_cov=False,
-    std_mat=None,
-    n_mat_samples=100,
     include_ov=False,
     ov_cov=None,
     annot_suffix="L2_2",
@@ -57,6 +53,7 @@ def get_tau_z_dep(
         ov_cov = np.ones(
             mat.shape[0],
         )
+    n_annot = mat.shape[1]
     if include_ov:
         index_select = ["L2_1"] + [f"{i}{annot_suffix}" for i in range(n_annot)]
         mat_w_cov = np.concatenate([ov_cov[:, None], mat], axis=1)

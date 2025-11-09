@@ -51,15 +51,15 @@ class NormalDataDecoder(ProximityDecoder):
         self,
         u: torch.Tensor,
         v: torch.Tensor,
-        src_scale,
+        src_logscale,
         src_bias,
         src_std,
-        dst_scale,
+        dst_logscale,
         dst_bias,
         dst_std,
         # b: torch.Tensor, l: Optional[torch.Tensor]
     ) -> D.Normal:
-        scale = F.softplus(src_scale) * F.softplus(dst_scale)
+        scale = torch.exp(src_logscale + dst_logscale)
 
         cos = torch.nn.CosineSimilarity()
         loc = scale * cos(u, v) + src_bias + dst_bias
@@ -150,25 +150,21 @@ class BernoulliDataDecoder(ProximityDecoder):
         self,
         u: torch.Tensor,
         v: torch.Tensor,
-        src_scale,
+        src_logscale,
         src_bias,
         src_std,
-        dst_scale,
+        dst_logscale,
         dst_bias,
         dst_std,
         # b: torch.Tensor, l: Optional[torch.Tensor]
     ) -> D.Normal:
         cos = torch.nn.CosineSimilarity()
 
-        scale = F.softplus(src_scale) * F.softplus(dst_scale)
-
+        # scale = F.softplus(src_scale) * F.softplus(dst_scale)
+        scale = torch.exp(src_logscale + dst_logscale)
         logit = scale * cos(u, v) + src_bias + dst_bias
-        if torch.any(torch.isnan(logit)):
-            nan_idx = torch.isnan(logit).nonzero(as_tuple=True)[0]
-            print(
-                f"NaN in logit: u={u[nan_idx]}, v={v[nan_idx]}, src_scale={src_scale[nan_idx]}, dst_scale={dst_scale[nan_idx]}, src_bias={src_bias[nan_idx]}, dst_bias={dst_bias[nan_idx]}, src_std={src_std[nan_idx]}, dst_std={dst_std[nan_idx]}"
-            )
-        return D.Bernoulli(logits=logit)
+        return D.Bernoulli(logits=cos(u, v))
+        # return D.Bernoulli(logits=logit)
 
 
 class NegativeBinomialDataDecoder(ProximityDecoder):
@@ -187,18 +183,13 @@ class NegativeBinomialDataDecoder(ProximityDecoder):
         self,
         u: torch.Tensor,
         v: torch.Tensor,
-        src_scale,
-        src_bias,
-        src_std,
-        dst_scale,
-        dst_bias,
         dst_std,
         # b: torch.Tensor, l: Optional[torch.Tensor]
     ) -> D.Normal:
-        scale = F.softplus(src_scale) * F.softplus(dst_scale)
+        # scale = torch.exp(src_logscale + dst_logscale)
+        # scale = src_scale * dst_scale
 
-        cos = torch.nn.CosineSimilarity()
-        loc = torch.exp(scale * cos(u, v) + src_bias + dst_bias)
-        # std = torch.exp(dst_std)
-        std = torch.exp((src_std + dst_std).clamp(MIN_LOGSTD, MAX_LOGSTD))
+        loc = torch.exp((u * v).sum(axis=1))
+        # std = torch.exp((src_std + dst_std).clamp(MIN_LOGSTD, MAX_LOGSTD))
+        std = torch.exp(dst_std)  # + src_std)
         return NegativeBinomial(mu=loc, theta=std)  # std, validate_args=True)

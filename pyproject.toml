@@ -4,9 +4,9 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "simba_plus"
-version = "0.2.0"
+version = "0.2.1"
 authors = [
-    { name = "Jayoung Ryu", email = "jayoungkimryu@gmail.com" },
+    { name = "Jayoung Ryu", email = "jr7348@nyu.edu" },
     { name = "Junxi Feng", email = "junxifeng0511@gmail.com" }
 ]
 dependencies = [

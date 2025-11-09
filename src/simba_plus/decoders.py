@@ -67,31 +67,31 @@ class RelationalEdgeDistributionDecoder(torch.nn.Module):
         batch,
         z_dict: Dict[NodeType, Tensor],
         edge_index_dict: Dict[EdgeType, Tensor],
-        src_scale_dict,
+        src_logscale_dict,
         src_bias_dict,
         src_std_dict,
-        dst_scale_dict,
+        dst_logscale_dict,
         dst_bias_dict,
         dst_std_dict,
     ) -> Dict[EdgeType, Distribution]:
         """Decodes the latent variable per edge type"""
         out_dict = {}
-        # import pdb; pdb.set_trace()
         for edge_type, edge_index in edge_index_dict.items():
             src_type, _, dst_type = edge_type
             prob_decoder = self.prob_dict[",".join(edge_type)]
             src_z = z_dict[src_type]
             dst_z = z_dict[dst_type]
+
             u = src_z[edge_index[0], :]
             v = dst_z[edge_index[1], :]
 
             out_dict[edge_type] = prob_decoder.forward(
-                u,
-                v,
-                src_scale=src_scale_dict[edge_type],
+                u=u,
+                v=v,
+                src_logscale=src_logscale_dict[edge_type],
                 src_bias=src_bias_dict[edge_type],
                 src_std=src_std_dict[edge_type],
-                dst_scale=dst_scale_dict[edge_type],
+                dst_logscale=dst_logscale_dict[edge_type],
                 dst_bias=dst_bias_dict[edge_type],
                 dst_std=dst_std_dict[edge_type],
             )

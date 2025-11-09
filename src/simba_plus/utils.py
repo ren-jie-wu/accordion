@@ -7,7 +7,6 @@ from torch.utils.data import DataLoader
 from torch_geometric.data import HeteroData
 from torch_geometric.typing import EdgeType
 from torch_geometric.utils.num_nodes import maybe_num_nodes
-from torch_geometric.transforms.remove_isolated_nodes import RemoveIsolatedNodes
 import lightning as L
 from lightning.pytorch.callbacks.early_stopping import EarlyStopping
 import os
@@ -56,9 +55,9 @@ class MyDataModule(L.LightningDataModule):
         self.train_loader = train_loader
         self.val_loader = val_loader
 
-    def setup(self, stage: str):
-        if stage == "fit":
-            self.train_loader.dataset.setup()
+    # def setup(self, stage: str):
+    #     if stage == "fit":
+    #         self.train_loader.dataset.setup()
 
     def train_dataloader(self):
         return self.train_loader
@@ -207,9 +206,13 @@ def get_edge_split_data(data, data_path, edge_types, logger):
         with open(data_idx_path, "wb") as f:
             pkl.dump({"val": val_index_dict, "test": test_index_dict}, f)
         train_data = CustomMultiIndexDataset(
-            edge_types, list(train_index_dict.values())
+            edge_types,
+            [train_index_dict["__".join(edge_type)] for edge_type in edge_types],
         )
-        val_data = CustomMultiIndexDataset(edge_types, list(val_index_dict.values()))
+        val_data = CustomMultiIndexDataset(
+            edge_types,
+            [val_index_dict["__".join(edge_type)] for edge_type in edge_types],
+        )
     return train_data, val_data
 
 

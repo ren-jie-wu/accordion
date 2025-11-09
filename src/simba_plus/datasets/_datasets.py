@@ -566,3 +566,24 @@ def heritability(logger=None):
         _log(f"Downloading SNP list to {fullpath_snplist}...")
         download_url(url_snplist, fullpath_snplist, desc="hm3_no_MHC.list.txt")
         _log(f"Downloaded to {fullpath_snplist}.")
+
+
+def sumstats(logger=None):
+    def _log(msg):
+        if logger is None:
+            print(msg)
+        else:
+            logger.info(msg)
+
+    sumstats_url = "https://figshare.com/ndownloader/files/34300928"
+    filename = "sumstats.txt"
+    filepath_prefix = os.path.join(os.path.dirname(__file__), "../../../data/sumstats/")
+    fullpath_sumstats = os.path.join(filepath_prefix, filename)
+
+    if not os.path.exists(fullpath_sumstats):
+        _log(f"Downloading sumstats to {fullpath_sumstats}...")
+        os.makedirs(filepath_prefix, exist_ok=True)
+        download_url(sumstats_url, fullpath_sumstats, desc=filename)
+        _log(f"Downloaded to {fullpath_sumstats}.")
+    else:
+        _log(f"Sumstats already present at {fullpath_sumstats}, skipping download.")

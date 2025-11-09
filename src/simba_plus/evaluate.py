@@ -42,7 +42,7 @@ def decode(
         batch,
         z_dict,
         pos_edge_index_dict,
-        *model.aux_params(batch, {k: v.cpu() for k, v in pos_edge_index_dict.items()}),
+        **model.aux_params(batch, {k: v.cpu() for k, v in pos_edge_index_dict.items()}),
     )
     neg_edge_index_dict = {}
     for edge_type, pos_edge_index in pos_edge_index_dict.items():
@@ -65,7 +65,8 @@ def decode(
             num_neg_samples=_n_neg_samples,
         )
         neg_edge_index_dict[edge_type] = torch.stack([neg_src_idx, neg_dst_idx])
-
+    if n_negative_samples == 0:
+        return pos_dist_dict, {}, {}
     neg_dist_dict: Dict[EdgeType, Tensor] = model.decoder(
         batch,
         z_dict,
@@ -80,7 +81,7 @@ def get_gexp_metrics(
     eval_data: torch_geometric.data.Data,
     train_index: torch_geometric.data.Data,
     batch_size: Optional[int] = None,
-    n_negative_samples: Optional[int] = None,
+    n_negative_samples: Optional[int] = 0,
     device: str = "cpu",
     num_workers: int = 2,
 ):
@@ -90,6 +91,7 @@ def get_gexp_metrics(
     gexp_mat = (
         to_dense_adj(
             eval_data[gexp_edge_type].edge_index,
+            edge_attr=eval_data[gexp_edge_type].edge_attr,
         )[0, : eval_data["cell"].num_nodes, : eval_data["gene"].num_nodes]
         .cpu()
         .numpy()
@@ -120,16 +122,18 @@ def get_gexp_metrics(
             pos_dist_dict, neg_edge_index_dict, neg_dist_dict = decode(
                 model, gene_batch, train_index, n_negative_samples=n_negative_samples
             )
+            print(pos_dist_dict[gexp_edge_type].mean.shape)
             means.append(pos_dist_dict[gexp_edge_type].mean)
             stds.append(pos_dist_dict[gexp_edge_type].stddev)
-            neg_means.append(neg_dist_dict[gexp_edge_type].mean)
-            neg_stds.append(neg_dist_dict[gexp_edge_type].stddev)
-            neg_idx.append(neg_edge_index_dict[gexp_edge_type])
-        gexp_pred_mu = torch.cat(means + neg_means)
-        gexp_pred_std = torch.cat(stds + neg_stds)
-        gexp_neg_idx = torch.cat(neg_idx, dim=1)
+            # neg_means.append(neg_dist_dict[gexp_edge_type].mean)
+            # neg_stds.append(neg_dist_dict[gexp_edge_type].stddev)
+            # neg_idx.append(neg_edge_index_dict[gexp_edge_type])
+        gexp_pred_mu = torch.cat(means)  # + neg_means)
+        print(gexp_pred_mu.shape)
+        gexp_pred_std = torch.cat(stds)  # + neg_stds)
+        # gexp_neg_idx = torch.cat(neg_idx, dim=1)
     pos_idxs = eval_data[gexp_edge_type].edge_index[:, gexp_dataset.indexes[0]]
-    all_idxs = torch.cat([pos_idxs, gexp_neg_idx], dim=1)
+    all_idxs = pos_idxs  # torch.cat([pos_idxs, gexp_neg_idx], dim=1)
     test_dense_mat = scipy.sparse.coo_matrix(
         (
             gexp_pred_mu.detach().cpu().numpy(),
@@ -146,9 +150,21 @@ def get_gexp_metrics(
     for i in range(res_out_norm.shape[1]):
         if gexp_mean[i] == 0:
             continue
-        corrs.append(np.corrcoef(res_out_norm[:, i], gexp_norm[:, i])[0, 1].item())
+        nonzero_idx = gexp_mat[:, i] > 0
+        if nonzero_idx.sum() == 0:
+            continue
+        if len(np.unique(gexp_norm[nonzero_idx, i])) == 1:
+            continue
+
+        corrs.append(
+            np.corrcoef(res_out_norm[:, i][nonzero_idx], gexp_norm[:, i][nonzero_idx])[
+                0, 1
+            ].item()
+        )
         spearman_corrs.append(
-            spearmanr(res_out_norm[:, i], gexp_norm[:, i]).correlation
+            spearmanr(
+                res_out_norm[:, i][nonzero_idx], gexp_norm[:, i][nonzero_idx]
+            ).correlation
         )
     return {
         "per-gene corr": np.array(corrs),
@@ -240,19 +256,19 @@ def get_accessibility_metrics(
 
 def eval(
     model_path: str,
-    data: str,
+    data_path: str,
     device: str = "cpu",
     eval_split: Literal["test", "val"] = "test",
     batch_size: Optional[int] = None,
-    n_negative_samples: Optional[int] = None,
+    n_negative_samples: Optional[int] = 0,
     index_path: Optional[str] = None,
     logger=None,
 ):
-    data = torch.load(data, weights_only=False)
+    data = torch.load(data_path, weights_only=False)
     data.generate_ids()
     data.to(device)
     if index_path is None:
-        index_path = f"{os.path.dirname(model_path)}/data_idx.pkl"
+        index_path = f"{data_path.split('.dat')[0]}_data_idx.pkl"
     with open(index_path, "rb") as f:
         data_idx = pkl.load(f)
     if eval_split == "test":
@@ -351,7 +367,7 @@ def add_argument(parser: ArgumentParser) -> ArgumentParser:
         "--n-negative-samples",
         type=int,
         help="Number of negative samples for evaluation.",
-        default=None,
+        default=0,
     )
     parser.add_argument(
         "--device",
@@ -439,7 +455,9 @@ def main(args, logger=None):
             "simba+evaluate", log_dir=os.path.dirname(args.model_path)
         )
     metric_dict_path = f"{os.path.dirname(args.model_path)}/pred_dict.pkl"
-    if os.path.exists(metric_dict_path):
+    logger.info(f"Evaluating model {args.model_path}...")
+    if not args.rerun and os.path.exists(metric_dict_path):
+        logger.info(f"Loading existing metrics from {metric_dict_path}...")
         with open(metric_dict_path, "rb") as file:
             metric_dict = pkl.load(file)
         pretty_print(metric_dict, logger=logger)

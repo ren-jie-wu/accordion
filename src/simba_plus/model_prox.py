@@ -35,7 +35,7 @@ class AuxParams(nn.Module):
         super().__init__()
         # Batch correction for RNA-seq data
         self.bias_dict = nn.ParameterDict()
-        self.scale_dict = nn.ParameterDict()
+        self.logscale_dict = nn.ParameterDict()
         self.std_dict = nn.ParameterDict()
         self.use_batch = False
         self.edgetype_specific = edgetype_specific
@@ -44,36 +44,28 @@ class AuxParams(nn.Module):
             and torch.unique(data["cell"].batch).size(0) > 1
         ):
             self.use_batch = True
-            self.bias_logstd_dict = nn.ParameterDict()
-            self.scale_logstd_dict = nn.ParameterDict()
-            self.std_logstd_dict = nn.ParameterDict()
+        self.bias_logstd_dict = nn.ParameterDict()
+        self.logscale_logstd_dict = nn.ParameterDict()
+        self.std_logstd_dict = nn.ParameterDict()
         for edge_type in data.edge_types:
             src, _, dst = edge_type
             if edgetype_specific:
-                src_bias_key = make_key(src, edge_type)
-                dst_bias_key = make_key(dst, edge_type)
-                src_scale_key = make_key(src, edge_type)
-                dst_scale_key = make_key(dst, edge_type)
-                src_std_key = make_key(src, edge_type)
-                dst_std_key = make_key(dst, edge_type)
+                src_key = make_key(src, edge_type)
+                dst_key = make_key(dst, edge_type)
             else:
-                src_bias_key = src
-                dst_bias_key = dst
-                src_scale_key = src
-                dst_scale_key = dst
-                src_std_key = src
-                dst_std_key = dst
-            self.scale_dict[src_scale_key] = nn.Parameter(
-                torch.ones(
-                    data[src].num_nodes,
-                )
-            )
-            self.bias_dict[src_bias_key] = nn.Parameter(
+                src_key = src
+                dst_key = dst
+            self.logscale_dict[src_key] = nn.Parameter(
                 torch.zeros(
                     data[src].num_nodes,
                 )
             )
-            self.std_dict[src_std_key] = nn.Parameter(
+            self.bias_dict[src_key] = nn.Parameter(
+                torch.zeros(
+                    data[src].num_nodes,
+                )
+            )
+            self.std_dict[src_key] = nn.Parameter(
                 torch.zeros(
                     data[src].num_nodes,
                 )
@@ -81,59 +73,74 @@ class AuxParams(nn.Module):
 
             if self.use_batch:
                 n_batches = len(data["cell"].batch.unique())
-                self.scale_dict[dst_scale_key] = nn.Parameter(
-                    torch.cat(
-                        [
-                            torch.ones((1, data[dst].num_nodes)),
-                            torch.zeros((n_batches - 1, data[dst].num_nodes)),
-                        ]
-                    )
-                )
-                self.bias_dict[dst_bias_key] = nn.Parameter(
-                    torch.ones(
+                self.logscale_dict[dst_key] = nn.Parameter(
+                    torch.zeros(
                         (n_batches, data[dst].num_nodes),
                         # device=self.device,
                     )
                 )
-                self.std_dict[dst_bias_key] = nn.Parameter(
-                    torch.ones(
+                self.bias_dict[dst_key] = nn.Parameter(
+                    torch.zeros(
+                        (n_batches, data[dst].num_nodes),
+                        # device=self.device,
+                    )
+                )
+                self.std_dict[dst_key] = nn.Parameter(
+                    torch.zeros(
                         (n_batches, data[dst].num_nodes),
                         # device=self.device,
                     )
                 )
 
-                self.scale_logstd_dict[dst_scale_key] = nn.Parameter(
+                self.logscale_logstd_dict[dst_key] = nn.Parameter(
                     torch.zeros(
-                        (n_batches - 1, data[dst].num_nodes),
+                        (n_batches, data[dst].num_nodes),
                     ),
                 )
-                self.bias_logstd_dict[dst_bias_key] = nn.Parameter(
+                self.bias_logstd_dict[dst_key] = nn.Parameter(
                     torch.zeros(
-                        (n_batches - 1, data[dst].num_nodes),
+                        (n_batches, data[dst].num_nodes),
                         # device=self.device,
                     )
                 )
-                self.std_logstd_dict[dst_bias_key] = nn.Parameter(
+                self.std_logstd_dict[dst_key] = nn.Parameter(
                     torch.zeros(
-                        (n_batches - 1, data[dst].num_nodes),
+                        (n_batches, data[dst].num_nodes),
                         # device=self.device,
                     )
                 )
             else:
-                self.scale_dict[dst_scale_key] = nn.Parameter(
-                    torch.ones(
+                self.logscale_dict[dst_key] = nn.Parameter(
+                    torch.zeros(
                         data[dst].num_nodes,
                     )
                 )
-                self.bias_dict[dst_std_key] = nn.Parameter(
+                self.bias_dict[dst_key] = nn.Parameter(
                     torch.zeros(
                         data[dst].num_nodes,
                     )
                 )
 
-                self.std_dict[dst_std_key] = nn.Parameter(
+                self.std_dict[dst_key] = nn.Parameter(
                     torch.zeros(
                         data[dst].num_nodes,
+                    )
+                )
+                self.logscale_logstd_dict[dst_key] = nn.Parameter(
+                    torch.zeros(
+                        data[dst].num_nodes,
+                    ),
+                )
+                self.bias_logstd_dict[dst_key] = nn.Parameter(
+                    torch.zeros(
+                        data[dst].num_nodes,
+                        # device=self.device,
+                    )
+                )
+                self.std_logstd_dict[dst_key] = nn.Parameter(
+                    torch.zeros(
+                        data[dst].num_nodes,
+                        # device=self.device,
                     )
                 )
 
@@ -169,133 +176,108 @@ class AuxParams(nn.Module):
         return -0.5 * weighted_sum(kls, weight)
 
     def batched(self, param, param_logstd):
-        adj_param = param[1:, :]
-        baseline = param[0, :].unsqueeze(0)
+        return_param = param
         if self.training:
-            adj_param = (
-                adj_param
-                + baseline
-                + torch.randn_like(param_logstd)
-                * torch.exp(param_logstd.clamp(MIN_LOGSTD, MAX_LOGSTD))
+            return_param = return_param + torch.randn_like(param_logstd) * torch.exp(
+                param_logstd
             )
-        else:
-            adj_param = adj_param + baseline
-        return_param = torch.cat([baseline, adj_param], dim=0)
         return return_param
 
     def forward(self, batch, edge_index_dict):
-        src_scale_dict, src_bias_dict, src_std_dict = {}, {}, {}
-        dst_scale_dict, dst_bias_dict, dst_std_dict = {}, {}, {}
+        src_logscale_dict, src_bias_dict, src_std_dict = {}, {}, {}
+        dst_logscale_dict, dst_bias_dict, dst_std_dict = {}, {}, {}
         for edge_type, edge_index in edge_index_dict.items():
             src_type, _, dst_type = edge_type
 
             (
-                src_bias_key,
-                dst_bias_key,
-                src_scale_key,
-                dst_scale_key,
-                src_std_key,
-                dst_std_key,
+                src_key,
+                dst_key,
             ) = self.get_keys(src_type, dst_type, edge_type)
 
             src_node_id = batch[src_type].n_id[edge_index[0]]
-            src_scale_dict[edge_type] = self.scale_dict[src_scale_key][src_node_id]
-            src_bias_dict[edge_type] = self.bias_dict[src_bias_key][src_node_id]
-            src_std_dict[edge_type] = self.std_dict[src_std_key][src_node_id]
+            src_logscale_dict[edge_type] = self.logscale_dict[src_key][src_node_id]
+            src_bias_dict[edge_type] = self.bias_dict[src_key][src_node_id]
+            src_std_dict[edge_type] = self.std_dict[src_key][src_node_id]
 
             dst_node_id = batch[dst_type].n_id[edge_index[1]]
             if self.use_batch:
                 batches = batch["cell"].batch[edge_index[0]].long()
-                dst_scale_dict[edge_type] = self.batched(
-                    self.scale_dict[dst_scale_key],
-                    self.scale_logstd_dict[dst_scale_key],
+                dst_logscale_dict[edge_type] = self.batched(
+                    self.logscale_dict[dst_key],
+                    self.scale_logstd_dict[dst_key],
                 )[batches, dst_node_id]
                 dst_bias_dict[edge_type] = self.batched(
-                    self.bias_dict[dst_bias_key], self.bias_logstd_dict[dst_bias_key]
+                    self.bias_dict[dst_key], self.bias_logstd_dict[dst_key]
                 )[batches, dst_node_id]
                 dst_std_dict[edge_type] = self.batched(
-                    self.std_dict[dst_std_key], self.std_logstd_dict[dst_std_key]
+                    self.std_dict[dst_key], self.std_logstd_dict[dst_key]
                 )[batches, dst_node_id]
             else:
-                dst_scale_dict[edge_type] = self.scale_dict[dst_scale_key][dst_node_id]
-                dst_bias_dict[edge_type] = self.bias_dict[dst_bias_key][dst_node_id]
-                dst_std_dict[edge_type] = self.std_dict[dst_std_key][dst_node_id]
-        return (
-            src_scale_dict,
-            src_bias_dict,
-            src_std_dict,
-            dst_scale_dict,
-            dst_bias_dict,
-            dst_std_dict,
-        )
+                dst_logscale_dict[edge_type] = self.batched(
+                    self.logscale_dict[dst_key],
+                    self.logscale_logstd_dict[dst_key],
+                )[dst_node_id]
+                dst_bias_dict[edge_type] = self.batched(
+                    self.bias_dict[dst_key], self.bias_logstd_dict[dst_key]
+                )[dst_node_id]
+                dst_std_dict[edge_type] = self.batched(
+                    self.std_dict[dst_key], self.std_logstd_dict[dst_key]
+                )[dst_node_id]
+        return {
+            "src_logscale_dict": src_logscale_dict,
+            "src_bias_dict": src_bias_dict,
+            "src_std_dict": src_std_dict,
+            "dst_logscale_dict": dst_logscale_dict,
+            "dst_bias_dict": dst_bias_dict,
+            "dst_std_dict": dst_std_dict,
+        }
 
     def get_keys(self, src_type, dst_type, edge_type):
         if self.edgetype_specific:
-            src_bias_key = make_key(src_type, edge_type)
-            dst_bias_key = make_key(dst_type, edge_type)
-            src_scale_key = make_key(src_type, edge_type)
-            dst_scale_key = make_key(dst_type, edge_type)
-            src_std_key = make_key(src_type, edge_type)
-            dst_std_key = make_key(dst_type, edge_type)
+            src_key = make_key(src_type, edge_type)
+            dst_key = make_key(dst_type, edge_type)
         else:
-            src_bias_key = src_type
-            dst_bias_key = dst_type
-            src_scale_key = src_type
-            dst_scale_key = dst_type
-            src_std_key = src_type
-            dst_std_key = dst_type
+            src_key = src_type
+            dst_key = dst_type
         return (
-            src_bias_key,
-            dst_bias_key,
-            src_scale_key,
-            dst_scale_key,
-            src_std_key,
-            dst_std_key,
+            src_key,
+            dst_key,
         )
 
     def kl_div_loss(self, batch, node_weights_dict):
-        if not self.batched:
-            return torch.tensor(0.0)
-
         l = torch.tensor(0.0, device=next(self.parameters()).device)
         for edge_type in batch.edge_types:
             edge_index = batch[edge_type].edge_index
             src_type, _, dst_type = edge_type
             (
-                src_bias_key,
-                dst_bias_key,
-                src_scale_key,
-                dst_scale_key,
-                src_std_key,
-                dst_std_key,
+                src_key,
+                dst_key,
             ) = self.get_keys(src_type, dst_type, edge_type)
             if self.use_batch:
                 batches = batch["cell"].batch[edge_index[0]].long()
                 dst_node_id = batch[dst_type].n_id[edge_index[1]]
                 # obtain unique index
 
-                sub_idx = torch.where(batches != 0)[0]
-                if len(sub_idx) == 0:
-                    continue
-                batches = batches[sub_idx]
-                dst_node_id = dst_node_id[sub_idx]
+                # sub_idx = torch.where(batches != 0)[0]
+                # if len(sub_idx) == 0:
+                #     continue
+                # batches = batches[sub_idx]
+                # dst_node_id = dst_node_id[sub_idx]
                 unique_index = torch.unique(torch.stack([batches, dst_node_id]), dim=0)
 
-                batches = unique_index[0, :] - 1  # because batch 0 is baseline
+                batches = unique_index[0, :]  # because batch 0 is baseline
                 dst_node_id = unique_index[1, :]
                 weight = node_weights_dict[dst_type][dst_node_id]
-                m_scale = self.scale_dict[dst_scale_key][batches, dst_node_id]
-                logstd_scale = self.scale_logstd_dict[dst_scale_key][
+                m_logscale = self.logscale_dict[dst_key][batches, dst_node_id]
+                logstd_logscale = self.logscale_logstd_dict[dst_key][
                     batches, dst_node_id
                 ]
-                l += self._kl_loss(m_scale, logstd_scale, weight)
-                m_bias = self.bias_dict[dst_bias_key][batches, dst_node_id]
-                logstd_bias = self.bias_logstd_dict[dst_bias_key][
-                    batches - 1, dst_node_id
-                ]
+                l += self._kl_loss(m_logscale, logstd_logscale, weight)
+                m_bias = self.bias_dict[dst_key][batches, dst_node_id]
+                logstd_bias = self.bias_logstd_dict[dst_key][batches, dst_node_id]
                 l += self._kl_loss(m_bias, logstd_bias, weight)
-                m_std = self.std_dict[dst_std_key][batches, dst_node_id]
-                logstd_std = self.std_logstd_dict[dst_std_key][batches - 1, dst_node_id]
+                m_std = self.std_dict[dst_key][batches, dst_node_id]
+                logstd_std = self.std_logstd_dict[dst_key][batches, dst_node_id]
                 l += self._kl_loss(m_std, logstd_std, weight)
         return l
 
@@ -314,7 +296,7 @@ class LightningProxModel(L.LightningModule):
         hsic: Optional[nn.Module] = None,
         herit_loss: Optional[nn.Module] = None,
         herit_loss_lam: float = 1,
-        n_no_kl: int = 0,
+        n_no_kl: int = 10,
         n_kl_warmup: int = 1,
         nll_scale: float = 1.0,
         val_nll_scale: float = 1.0,
@@ -326,7 +308,6 @@ class LightningProxModel(L.LightningModule):
     ):
         super().__init__()
         self.save_hyperparameters()
-        data.generate_ids()
         self.nonneg = nonneg
         self.data = data
         self.learning_rate = learning_rate
@@ -398,12 +379,9 @@ class LightningProxModel(L.LightningModule):
             if self.training:
                 out_dict[node_type] = mu_dict[node_type] + torch.randn_like(
                     logstd_dict[node_type]
-                ) * torch.exp(logstd_dict[node_type].clamp(MIN_LOGSTD, MAX_LOGSTD))
+                ) * torch.exp(logstd_dict[node_type])
             else:
                 out_dict[node_type] = mu_dict[node_type]
-        if self.nonneg:
-            transf = nn.ReLU()
-            out_dict = {k: transf(v) for k, v in out_dict.items()}
         return out_dict
 
     def relational_recon_loss(
@@ -431,7 +409,7 @@ class LightningProxModel(L.LightningModule):
             batch,
             z_dict,
             pos_edge_index_dict,
-            *self.aux_params(batch, pos_edge_index_dict),
+            **self.aux_params(batch, pos_edge_index_dict),
         )
 
         if neg_sample:
@@ -460,7 +438,7 @@ class LightningProxModel(L.LightningModule):
                 batch,
                 z_dict,
                 neg_edge_index_dict,
-                *self.aux_params(batch, neg_edge_index_dict),
+                **self.aux_params(batch, neg_edge_index_dict),
             )
 
         loss_dict = {}
@@ -576,17 +554,15 @@ class LightningProxModel(L.LightningModule):
         neg_edge_index_dict: Optional[Dict[EdgeType, Tensor]] = None,
         # num_neg_samples_fold: Optional[int] = 1,
         edgetype_loss_weight_dict: Optional[Dict[EdgeType, float]] = None,
-        plot=False,
-        get_metric=False,
+        neg_sample=False,
     ):
         nll_dict, neg_edge_index_dict, metric_dict = self.relational_recon_loss(
-            batch,
-            z_dict,
-            pos_edge_index_dict,
-            pos_edge_weight_dict,
-            neg_edge_index_dict,
-            plot=plot,
-            get_metric=get_metric,
+            batch=batch,
+            z_dict=z_dict,
+            pos_edge_index_dict=pos_edge_index_dict,
+            pos_edge_weight_dict=pos_edge_weight_dict,
+            neg_edge_index_dict=neg_edge_index_dict,
+            neg_sample=neg_sample,
         )
         l = torch.tensor(0.0, device=self.device)
         for edge_type, nll in nll_dict.items():
@@ -606,16 +582,14 @@ class LightningProxModel(L.LightningModule):
 
     def training_step(self, batch, batch_idx):
         t0 = time.time()
-
         mu_dict, logstd_dict = self.encode(batch)
-
         z_dict = self.reparametrize(mu_dict, logstd_dict)
         t0 = time.time()
         batch_nll_loss, neg_edge_index_dict, _ = self.nll_loss(
-            batch,
-            z_dict,
-            batch.edge_index_dict,
-            batch.edge_attr_dict,
+            batch=batch,
+            z_dict=z_dict,
+            pos_edge_index_dict=batch.edge_index_dict,
+            pos_edge_weight_dict=batch.edge_attr_dict,
             edgetype_loss_weight_dict=self.edgetype_loss_weight_dict,
         )
         t1 = time.time()
@@ -671,7 +645,7 @@ class LightningProxModel(L.LightningModule):
             on_step=True,
             on_epoch=True,
         )
-        loss = batch_nll_loss + batch_kl_div_loss / self.nll_scale + herit_loss_value
+        loss = batch_nll_loss  # + batch_kl_div_loss / self.nll_scale + #herit_loss_value  #
         self.log(
             "loss",
             loss,
@@ -691,6 +665,7 @@ class LightningProxModel(L.LightningModule):
             batch.edge_index_dict,
             batch.edge_attr_dict,
             edgetype_loss_weight_dict=self.edgetype_loss_weight_dict,
+            neg_sample=False,
         )
 
         if self.current_epoch >= self.n_no_kl:
@@ -707,7 +682,7 @@ class LightningProxModel(L.LightningModule):
             "val_nll_loss",
             batch_nll_loss,
             batch_size=sum([v.shape[1] for v in batch.edge_index_dict.values()]),
-            on_step=True,
+            on_step=False,
             on_epoch=True,
         )
         if self.herit_loss is not None:
@@ -723,20 +698,20 @@ class LightningProxModel(L.LightningModule):
                 "val_herit_loss",
                 herit_loss_value,
                 batch_size=sum([v.shape[1] for v in batch.edge_index_dict.values()]),
-                on_step=True,
+                on_step=False,
                 on_epoch=True,
             )
         else:
             herit_loss_value = torch.tensor(0.0)
-        loss = (
-            batch_nll_loss + batch_kl_div_loss / self.val_nll_scale + herit_loss_value
-        )
+        loss = batch_nll_loss
+        # + batch_kl_div_loss / self.val_nll_scale + herit_loss_value
+        # )
         self.log(
             "val_nll_loss_monitored",
             batch_nll_loss
             + (torch.inf if self.current_epoch < self.n_kl_warmup * 2 else 0),
             batch_size=sum([v.shape[1] for v in batch.edge_index_dict.values()]),
-            on_step=True,
+            on_step=False,
             on_epoch=True,
         )
 
@@ -744,14 +719,14 @@ class LightningProxModel(L.LightningModule):
             "val_kl_div_loss",
             batch_kl_div_loss / self.val_nll_scale,
             batch_size=sum([v.shape[1] for v in batch.edge_index_dict.values()]),
-            on_step=True,
+            on_step=False,
             on_epoch=True,
         )
         self.log(
-            "val_loss",
+            "valid_loss",
             loss,
             batch_size=sum([v.shape[1] for v in batch.edge_index_dict.values()]),
-            on_step=True,
+            on_step=False,
             on_epoch=True,
         )
 
@@ -799,13 +774,6 @@ class LightningProxModel(L.LightningModule):
             optimizer,
             patience=3,
         )
-        # scheduler = CyclicLR(
-        #     optimizer,
-        #     self.learning_rate / 2,
-        #     self.learning_rate * 2,
-        #     step_size_up=10,
-        #     mode="triangular2",
-        # )
         return [optimizer], [
             {
                 "scheduler": scheduler,
