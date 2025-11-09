@@ -19,7 +19,7 @@ lines.append(
 )
 
 for sub in SUBCOMMANDS:
-    lines.append(f"## `{sub}`\n\n")
+    lines.append(f"## simba+ `{sub}` ... \n\n")
     cmd = [sys.executable, "-m", "simba_plus.simba_plus", sub, "-h"]
     try:
         proc = subprocess.run(

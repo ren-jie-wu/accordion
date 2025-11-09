@@ -10,7 +10,7 @@ from torch_geometric.typing import EdgeType, NodeType
 from torch_geometric.transforms.remove_isolated_nodes import RemoveIsolatedNodes
 from torch_geometric.transforms.to_device import ToDevice
 from simba_plus.encoders import TransEncoder
-
+from simba_plus.constants import MIN_LOGSTD, MAX_LOGSTD
 from simba_plus.utils import negative_sampling
 
 # from torch_geometric.utils import negative_sampling
@@ -30,25 +30,292 @@ from simba_plus.evaluation_utils import (
 )
 
 
+class AuxParams(nn.Module):
+    def __init__(self, data: HeteroData, edgetype_specific: bool = True) -> None:
+        super().__init__()
+        # Batch correction for RNA-seq data
+        self.bias_dict = nn.ParameterDict()
+        self.scale_dict = nn.ParameterDict()
+        self.std_dict = nn.ParameterDict()
+        self.use_batch = False
+        self.edgetype_specific = edgetype_specific
+        if (
+            hasattr(data["cell"], "batch")
+            and torch.unique(data["cell"].batch).size(0) > 1
+        ):
+            self.use_batch = True
+            self.bias_logstd_dict = nn.ParameterDict()
+            self.scale_logstd_dict = nn.ParameterDict()
+            self.std_logstd_dict = nn.ParameterDict()
+        for edge_type in data.edge_types:
+            src, _, dst = edge_type
+            if edgetype_specific:
+                src_bias_key = make_key(src, edge_type)
+                dst_bias_key = make_key(dst, edge_type)
+                src_scale_key = make_key(src, edge_type)
+                dst_scale_key = make_key(dst, edge_type)
+                src_std_key = make_key(src, edge_type)
+                dst_std_key = make_key(dst, edge_type)
+            else:
+                src_bias_key = src
+                dst_bias_key = dst
+                src_scale_key = src
+                dst_scale_key = dst
+                src_std_key = src
+                dst_std_key = dst
+            self.scale_dict[src_scale_key] = nn.Parameter(
+                torch.ones(
+                    data[src].num_nodes,
+                )
+            )
+            self.bias_dict[src_bias_key] = nn.Parameter(
+                torch.zeros(
+                    data[src].num_nodes,
+                )
+            )
+            self.std_dict[src_std_key] = nn.Parameter(
+                torch.zeros(
+                    data[src].num_nodes,
+                )
+            )
+
+            if self.use_batch:
+                n_batches = len(data["cell"].batch.unique())
+                self.scale_dict[dst_scale_key] = nn.Parameter(
+                    torch.cat(
+                        [
+                            torch.ones((1, data[dst].num_nodes)),
+                            torch.zeros((n_batches - 1, data[dst].num_nodes)),
+                        ]
+                    )
+                )
+                self.bias_dict[dst_bias_key] = nn.Parameter(
+                    torch.ones(
+                        (n_batches, data[dst].num_nodes),
+                        # device=self.device,
+                    )
+                )
+                self.std_dict[dst_bias_key] = nn.Parameter(
+                    torch.ones(
+                        (n_batches, data[dst].num_nodes),
+                        # device=self.device,
+                    )
+                )
+
+                self.scale_logstd_dict[dst_scale_key] = nn.Parameter(
+                    torch.zeros(
+                        (n_batches - 1, data[dst].num_nodes),
+                    ),
+                )
+                self.bias_logstd_dict[dst_bias_key] = nn.Parameter(
+                    torch.zeros(
+                        (n_batches - 1, data[dst].num_nodes),
+                        # device=self.device,
+                    )
+                )
+                self.std_logstd_dict[dst_bias_key] = nn.Parameter(
+                    torch.zeros(
+                        (n_batches - 1, data[dst].num_nodes),
+                        # device=self.device,
+                    )
+                )
+            else:
+                self.scale_dict[dst_scale_key] = nn.Parameter(
+                    torch.ones(
+                        data[dst].num_nodes,
+                    )
+                )
+                self.bias_dict[dst_std_key] = nn.Parameter(
+                    torch.zeros(
+                        data[dst].num_nodes,
+                    )
+                )
+
+                self.std_dict[dst_std_key] = nn.Parameter(
+                    torch.zeros(
+                        data[dst].num_nodes,
+                    )
+                )
+
+    def _kl_loss(
+        self,
+        mu: Optional[Tensor] = None,
+        logstd: Optional[Tensor] = None,
+        weight: Optional[Tensor] = None,
+    ) -> Tensor:
+        r"""Computes the KL loss, either for the passed arguments :obj:`mu`
+        and :obj:`logstd`, or based on latent variables from last encoding.
+
+        Args:
+            mu (Tensor, optional): The latent space for :math:`\mu`. If set to
+                :obj:`None`, uses the last computation of :math:`mu`.
+                (default: :obj:`None`)
+            logstd (Tensor, optional): The latent space for
+                :math:`\log\sigma`.  If set to :obj:`None`, uses the last
+                computation of :math:`\log\sigma^2`.(default: :obj:`None`)
+            weight (Tensor, optional): weights of each position in the tensor.
+        """
+
+        def weighted_sum(x, w):
+            # if not w.any():
+            #     return 0
+            if w is None:
+                return x.sum()
+            return (x * w).sum()  # / w.long().sum()
+
+        mu = self.__mu__ if mu is None else mu
+        logstd = self.__logstd__ if logstd is None else logstd
+        kls = 1 + 2 * logstd - mu**2 - logstd.exp() ** 2
+        return -0.5 * weighted_sum(kls, weight)
+
+    def batched(self, param, param_logstd):
+        adj_param = param[1:, :]
+        baseline = param[0, :].unsqueeze(0)
+        if self.training:
+            adj_param = (
+                adj_param
+                + baseline
+                + torch.randn_like(param_logstd)
+                * torch.exp(param_logstd.clamp(MIN_LOGSTD, MAX_LOGSTD))
+            )
+        else:
+            adj_param = adj_param + baseline
+        return_param = torch.cat([baseline, adj_param], dim=0)
+        return return_param
+
+    def forward(self, batch, edge_index_dict):
+        src_scale_dict, src_bias_dict, src_std_dict = {}, {}, {}
+        dst_scale_dict, dst_bias_dict, dst_std_dict = {}, {}, {}
+        for edge_type, edge_index in edge_index_dict.items():
+            src_type, _, dst_type = edge_type
+
+            (
+                src_bias_key,
+                dst_bias_key,
+                src_scale_key,
+                dst_scale_key,
+                src_std_key,
+                dst_std_key,
+            ) = self.get_keys(src_type, dst_type, edge_type)
+
+            src_node_id = batch[src_type].n_id[edge_index[0]]
+            src_scale_dict[edge_type] = self.scale_dict[src_scale_key][src_node_id]
+            src_bias_dict[edge_type] = self.bias_dict[src_bias_key][src_node_id]
+            src_std_dict[edge_type] = self.std_dict[src_std_key][src_node_id]
+
+            dst_node_id = batch[dst_type].n_id[edge_index[1]]
+            if self.use_batch:
+                batches = batch["cell"].batch[edge_index[0]].long()
+                dst_scale_dict[edge_type] = self.batched(
+                    self.scale_dict[dst_scale_key],
+                    self.scale_logstd_dict[dst_scale_key],
+                )[batches, dst_node_id]
+                dst_bias_dict[edge_type] = self.batched(
+                    self.bias_dict[dst_bias_key], self.bias_logstd_dict[dst_bias_key]
+                )[batches, dst_node_id]
+                dst_std_dict[edge_type] = self.batched(
+                    self.std_dict[dst_std_key], self.std_logstd_dict[dst_std_key]
+                )[batches, dst_node_id]
+            else:
+                dst_scale_dict[edge_type] = self.scale_dict[dst_scale_key][dst_node_id]
+                dst_bias_dict[edge_type] = self.bias_dict[dst_bias_key][dst_node_id]
+                dst_std_dict[edge_type] = self.std_dict[dst_std_key][dst_node_id]
+        return (
+            src_scale_dict,
+            src_bias_dict,
+            src_std_dict,
+            dst_scale_dict,
+            dst_bias_dict,
+            dst_std_dict,
+        )
+
+    def get_keys(self, src_type, dst_type, edge_type):
+        if self.edgetype_specific:
+            src_bias_key = make_key(src_type, edge_type)
+            dst_bias_key = make_key(dst_type, edge_type)
+            src_scale_key = make_key(src_type, edge_type)
+            dst_scale_key = make_key(dst_type, edge_type)
+            src_std_key = make_key(src_type, edge_type)
+            dst_std_key = make_key(dst_type, edge_type)
+        else:
+            src_bias_key = src_type
+            dst_bias_key = dst_type
+            src_scale_key = src_type
+            dst_scale_key = dst_type
+            src_std_key = src_type
+            dst_std_key = dst_type
+        return (
+            src_bias_key,
+            dst_bias_key,
+            src_scale_key,
+            dst_scale_key,
+            src_std_key,
+            dst_std_key,
+        )
+
+    def kl_div_loss(self, batch, node_weights_dict):
+        if not self.batched:
+            return torch.tensor(0.0)
+
+        l = torch.tensor(0.0, device=next(self.parameters()).device)
+        for edge_type in batch.edge_types:
+            edge_index = batch[edge_type].edge_index
+            src_type, _, dst_type = edge_type
+            (
+                src_bias_key,
+                dst_bias_key,
+                src_scale_key,
+                dst_scale_key,
+                src_std_key,
+                dst_std_key,
+            ) = self.get_keys(src_type, dst_type, edge_type)
+            if self.use_batch:
+                batches = batch["cell"].batch[edge_index[0]].long()
+                dst_node_id = batch[dst_type].n_id[edge_index[1]]
+                # obtain unique index
+
+                sub_idx = torch.where(batches != 0)[0]
+                if len(sub_idx) == 0:
+                    continue
+                batches = batches[sub_idx]
+                dst_node_id = dst_node_id[sub_idx]
+                unique_index = torch.unique(torch.stack([batches, dst_node_id]), dim=0)
+
+                batches = unique_index[0, :] - 1  # because batch 0 is baseline
+                dst_node_id = unique_index[1, :]
+                weight = node_weights_dict[dst_type][dst_node_id]
+                m_scale = self.scale_dict[dst_scale_key][batches, dst_node_id]
+                logstd_scale = self.scale_logstd_dict[dst_scale_key][
+                    batches, dst_node_id
+                ]
+                l += self._kl_loss(m_scale, logstd_scale, weight)
+                m_bias = self.bias_dict[dst_bias_key][batches, dst_node_id]
+                logstd_bias = self.bias_logstd_dict[dst_bias_key][
+                    batches - 1, dst_node_id
+                ]
+                l += self._kl_loss(m_bias, logstd_bias, weight)
+                m_std = self.std_dict[dst_std_key][batches, dst_node_id]
+                logstd_std = self.std_logstd_dict[dst_std_key][batches - 1, dst_node_id]
+                l += self._kl_loss(m_std, logstd_std, weight)
+        return l
+
+
 class LightningProxModel(L.LightningModule):
     def __init__(
         self,
         data: HeteroData,
         encoder_class: torch.nn.Module = TransEncoder,
-        n_hidden_dims: int = 128,
         n_latent_dims: int = 50,
         decoder_class: torch.nn.Module = RelationalEdgeDistributionDecoder,
         device="cpu",
         num_neg_samples_fold: int = 1,
-        project_decoder: bool = True,
-        edgetype_specific_bias: bool = True,
-        edgetype_specific_scale: bool = True,
-        edgetype_specific_std: bool = True,
+        edgetype_specific: bool = True,
         edge_types: Optional[Tuple[str]] = None,
-        hsic: nn.Module = None,
-        n_no_kl: int = 1,
-        n_count_nodes: int = 20,
-        n_kl_warmup: int = 50,
+        hsic: Optional[nn.Module] = None,
+        herit_loss: Optional[nn.Module] = None,
+        herit_loss_lam: float = 1,
+        n_no_kl: int = 0,
+        n_kl_warmup: int = 1,
         nll_scale: float = 1.0,
         val_nll_scale: float = 1.0,
         learning_rate=1e-2,
@@ -56,10 +323,6 @@ class LightningProxModel(L.LightningModule):
         nonneg=False,
         reweight_rarecell: bool = False,
         reweight_rarecell_neighbors: Optional[int] = None,
-        positive_scale: bool = False,
-        train_data_dict: Optional[Dict[EdgeType, Tensor]] = None,
-        val_data_dict: Optional[Dict[EdgeType, Tensor]] = None,
-        decoder_scale_src: bool = True,
     ):
         super().__init__()
         self.save_hyperparameters()
@@ -69,20 +332,11 @@ class LightningProxModel(L.LightningModule):
         self.learning_rate = learning_rate
         self.encoder = encoder_class(
             data,
-            n_hidden_dims,
             n_latent_dims,
         )
         self.decoder = decoder_class(
             data,
-            n_latent_dims,
-            n_latent_dims,
             device=device,
-            project=project_decoder,
-            edgetype_specific_bias=edgetype_specific_bias,
-            edgetype_specific_scale=edgetype_specific_scale,
-            edgetype_specific_std=edgetype_specific_std,
-            positive_scale=positive_scale,
-            decoder_scale_src=decoder_scale_src,
         )
         self.hsic = hsic
         if self.hsic is not None:
@@ -90,14 +344,12 @@ class LightningProxModel(L.LightningModule):
                 self.encoder.parameters(), lr=hsic.lam
             )
         self.n_no_kl = n_no_kl
-        self.n_count_nodes = n_count_nodes
         self.n_kl_warmup = n_kl_warmup
         self.nll_scale = nll_scale
         self.val_nll_scale = val_nll_scale
         self.num_nodes_dict = {
             node_type: x.shape[0] for (node_type, x) in data.x_dict.items()
         }
-        self.train_data_dict = train_data_dict
         self.reweight_rarecell = reweight_rarecell
         if self.reweight_rarecell:
             self.cell_weights = torch.ones(data["cell"].num_nodes, device=device)
@@ -116,106 +368,12 @@ class LightningProxModel(L.LightningModule):
         }
 
         self.node_weights_dict = node_weights_dict
+        self.herit_loss = herit_loss
+        self.herit_loss_lam = herit_loss_lam
 
-        # Batch correction for RNA-seq data
-        self.bias_dict = nn.ParameterDict()
-        self.scale_dict = nn.ParameterDict()
-        self.std_dict = nn.ParameterDict()
-        for edge_type in data.edge_types:
-            src, _, dst = edge_type
-            if edgetype_specific_bias:
-                src_bias_key = make_key(src, edge_type)
-                dst_bias_key = make_key(dst, edge_type)
-            else:
-                src_bias_key = src
-                dst_bias_key = dst
-            if edgetype_specific_scale:
-                src_scale_key = make_key(src, edge_type)
-                dst_scale_key = make_key(dst, edge_type)
-            else:
-                src_scale_key = src
-                dst_scale_key = dst
-            if edgetype_specific_std:
-                src_std_key = make_key(src, edge_type)
-                dst_std_key = make_key(dst, edge_type)
-            else:
-                src_std_key = src
-                dst_std_key = dst
-            self.bias_dict[src_bias_key] = nn.Parameter(
-                torch.zeros(
-                    data[src].num_nodes,
-                )
-            )
-            self.bias_dict[dst_bias_key] = nn.Parameter(
-                torch.zeros(
-                    data[dst].num_nodes,
-                )
-            )
-            self.scale_dict[src_scale_key] = nn.Parameter(
-                torch.ones(
-                    data[src].num_nodes,
-                )
-            )
-            self.scale_dict[dst_scale_key] = nn.Parameter(
-                torch.ones(
-                    data[dst].num_nodes,
-                )
-            )
-            self.std_dict[src_std_key] = nn.Parameter(
-                torch.zeros(
-                    data[src].num_nodes,
-                )
-            )
-
-            self.std_dict[dst_std_key] = nn.Parameter(
-                torch.zeros(
-                    data[dst].num_nodes,
-                )
-            )
-
-            if hasattr(data["cell"], "batch"):
-                n_batches = len(data["cell"].batch.unique())
-                batch_features = ["gene", "peak"]
-                for batch_feature in batch_features:
-                    if batch_feature == src:
-                        self.scale_dict[src_scale_key] = nn.Parameter(
-                            torch.ones(
-                                (n_batches, data[src].num_nodes),
-                            )
-                        )
-                        self.bias_dict[src_bias_key] = nn.Parameter(
-                            torch.ones(
-                                (n_batches, data[batch_feature].num_nodes),
-                                # device=self.device,
-                            )
-                        )
-                        self.std_dict[src_bias_key] = nn.Parameter(
-                            torch.ones(
-                                (n_batches, data[batch_feature].num_nodes),
-                                # device=self.device,
-                            )
-                        )
-                    if batch_feature == dst:
-                        self.scale_dict[dst_scale_key] = nn.Parameter(
-                            torch.ones(
-                                (n_batches, data[dst].num_nodes),
-                                # device=self.device,
-                            )
-                        )
-                        self.bias_dict[dst_bias_key] = nn.Parameter(
-                            torch.ones(
-                                (n_batches, data[dst].num_nodes),
-                                # device=self.device,
-                            )
-                        )
-                        self.std_dict[dst_bias_key] = nn.Parameter(
-                            torch.ones(
-                                (n_batches, data[dst].num_nodes),
-                                # device=self.device,
-                            )
-                        )
         self.num_neg_samples_fold = num_neg_samples_fold
         self.validation_step_outputs = []
+        self.aux_params = AuxParams(data, edgetype_specific=edgetype_specific)
 
     def on_train_start(self):
         self.node_weights_dict = {
@@ -240,26 +398,13 @@ class LightningProxModel(L.LightningModule):
             if self.training:
                 out_dict[node_type] = mu_dict[node_type] + torch.randn_like(
                     logstd_dict[node_type]
-                ) * torch.exp(logstd_dict[node_type])
+                ) * torch.exp(logstd_dict[node_type].clamp(MIN_LOGSTD, MAX_LOGSTD))
             else:
                 out_dict[node_type] = mu_dict[node_type]
         if self.nonneg:
             transf = nn.ReLU()
             out_dict = {k: transf(v) for k, v in out_dict.items()}
         return out_dict
-
-    def project(
-        self, data: HeteroData, z_dict: Dict[NodeType, Tensor], edge_type: EdgeType
-    ) -> Tuple[Tensor, Tensor]:
-        """Projects all node in z_dict of edge_type to edge-type-specific space."""
-        src_type, _, dst_type = edge_type
-        src_z = z_dict[src_type]
-        dst_z = z_dict[dst_type]
-        if src_type == "cell" and self.decoder.add_covariate:
-            src_z = add_cov_to_latent(data[src_type], src_z)
-        if dst_type == "cell" and self.decoder.add_covariate:
-            dst_z = add_cov_to_latent(data[dst_type], dst_z)
-        return self.decoder.project(src_z, dst_z, src_type, dst_type)
 
     def relational_recon_loss(
         self,
@@ -282,22 +427,17 @@ class LightningProxModel(L.LightningModule):
         num_neg_samples: If neg_edge_index is None and
             num_neg_samples is None, This number of negative edges are sampled. Otherwise, the same number as the positive edges are sample.
         """
-
         pos_dist_dict: Dict[EdgeType, Distribution] = self.decoder(
             batch,
             z_dict,
             pos_edge_index_dict,
-            scale_dict=self.scale_dict,
-            bias_dict=self.bias_dict,
-            std_dict=self.std_dict,
+            *self.aux_params(batch, pos_edge_index_dict),
         )
 
         if neg_sample:
             if neg_edge_index_dict is None:
                 neg_edge_index_dict = {}
-
                 for edge_type, pos_edge_index in pos_edge_index_dict.items():
-
                     if len(pos_edge_index) == 0:
                         continue
                     src_type, _, dst_type = edge_type
@@ -310,16 +450,8 @@ class LightningProxModel(L.LightningModule):
                             batch[src_type].num_nodes,
                             batch[dst_type].num_nodes,
                         ),
-                        # num_neg_samples_fold=self.num_neg_samples_fold,
                         num_neg_samples_fold=self.num_neg_samples_fold,
-                        # method="dense",
                     )
-
-                    # if (neg_src_idx > batch[src_type].num_nodes).any():  # pragma: no cover
-                    #     raise ValueError(
-                    #         f"Negative sampling produced indices larger than the number of nodes in {src_type}. "
-                    #         f"Please check your data and the negative sampling parameters."
-                    #     )
                     neg_edge_index_dict[edge_type] = torch.stack(
                         [neg_src_idx, neg_dst_idx]
                     )
@@ -328,9 +460,7 @@ class LightningProxModel(L.LightningModule):
                 batch,
                 z_dict,
                 neg_edge_index_dict,
-                scale_dict=self.scale_dict,
-                bias_dict=self.bias_dict,
-                std_dict=self.std_dict,
+                *self.aux_params(batch, neg_edge_index_dict),
             )
 
         loss_dict = {}
@@ -344,8 +474,6 @@ class LightningProxModel(L.LightningModule):
             if neg_sample:
                 neg_log_probs = -neg_dist_dict[edge_type].log_prob(
                     torch.tensor(0.0, device=batch[src_type].x.device)
-                    if batch[edge_type].edge_dist != "Beta"
-                    else torch.tensor(1e-6, device=batch[src_type].x.device)
                 )
                 neg_loss = neg_log_probs.sum()
                 loss_dict[edge_type] = pos_loss + neg_loss
@@ -370,9 +498,7 @@ class LightningProxModel(L.LightningModule):
             logstd (Tensor, optional): The latent space for
                 :math:`\log\sigma`.  If set to :obj:`None`, uses the last
                 computation of :math:`\log\sigma^2`.(default: :obj:`None`)
-            weight (Tensor, optional): The latent space for
-                :math:`\log\sigma`.  If set to :obj:`None`, uses the last
-                computation of :math:`\log\sigma^2`.(default: :obj:`None`)
+            weight (Tensor, optional): weights of each position in the tensor.
         """
 
         def weighted_sum(x, w):
@@ -413,6 +539,7 @@ class LightningProxModel(L.LightningModule):
 
     def kl_div_loss(
         self,
+        batch,
         mu_dict: Dict[NodeType, Tensor],
         logstd_dict: Dict[NodeType, Tensor],
         node_index_dict: Dict[NodeType, Tensor],
@@ -437,14 +564,7 @@ class LightningProxModel(L.LightningModule):
             else:
                 nodetype_weight = 1.0
             l += kl_div * nodetype_weight
-        if hasattr(self.decoder, "variant_emb_locs"):
-            l += self._kl_loss(
-                self.decoder.variant_emb_locs,
-                self.decoder.variant_emb_logstd,
-            )
-            l += bernoulli_kl_loss(
-                torch.tensor(-2), self.decoder.variant_emb_mask_logitp
-            ).sum()
+        l += self.aux_params.kl_div_loss(batch, node_weights_dict)
         return l
 
     def nll_loss(
@@ -465,12 +585,18 @@ class LightningProxModel(L.LightningModule):
             pos_edge_index_dict,
             pos_edge_weight_dict,
             neg_edge_index_dict,
-            # num_neg_samples_fold,
             plot=plot,
             get_metric=get_metric,
         )
         l = torch.tensor(0.0, device=self.device)
         for edge_type, nll in nll_dict.items():
+            self.log(
+                f"{'train' if self.training else 'val'}_nll_loss/{edge_type}",
+                nll,
+                batch_size=batch[edge_type].edge_index.shape[1],
+                on_step=True,
+                on_epoch=True,
+            )
             if edgetype_loss_weight_dict:
                 edgetype_weight = edgetype_loss_weight_dict[edge_type]
             else:
@@ -479,22 +605,12 @@ class LightningProxModel(L.LightningModule):
         return l, neg_edge_index_dict, metric_dict
 
     def training_step(self, batch, batch_idx):
-        edge_attr_type, idx = batch
-        edge_attr_type = tuple(edge_attr_type)
-
-        batch = RemoveIsolatedNodes()(
-            self.data.edge_type_subgraph([edge_attr_type]).edge_subgraph(
-                {edge_attr_type: idx.cpu()}
-            )
-        )
         t0 = time.time()
-        batch = ToDevice(self.device)(batch)
-        print(f"moving to gpu:{time.time()-t0}")
 
         mu_dict, logstd_dict = self.encode(batch)
 
         z_dict = self.reparametrize(mu_dict, logstd_dict)
-
+        t0 = time.time()
         batch_nll_loss, neg_edge_index_dict, _ = self.nll_loss(
             batch,
             z_dict,
@@ -502,61 +618,70 @@ class LightningProxModel(L.LightningModule):
             batch.edge_attr_dict,
             edgetype_loss_weight_dict=self.edgetype_loss_weight_dict,
         )
+        t1 = time.time()
+        self.log("time:nll_loss", t1 - t0, on_step=True, on_epoch=False)
         if self.current_epoch >= self.n_no_kl:
+            t0 = time.time()
             batch_kl_div_loss = self.kl_div_loss(
+                batch,
                 mu_dict,
                 logstd_dict,
                 batch.n_id_dict,
                 node_weights_dict=self.node_weights_dict,
             )
+            t1 = time.time()
 
             batch_kl_div_loss *= min(
-                self.current_epoch, self.n_kl_warmup - self.n_no_kl
+                self.current_epoch + 1, self.n_kl_warmup - self.n_no_kl
             ) / (self.n_kl_warmup - self.n_no_kl)
         else:
             batch_kl_div_loss = 0.0
-
+        if self.herit_loss is not None:
+            t0 = time.time()
+            if "peak" in batch.node_types:
+                pid = batch["peak"].n_id.cpu()
+                herit_loss_value = self.herit_loss_lam * self.herit_loss(
+                    mu_dict["peak"],
+                    pid,
+                )
+            else:
+                herit_loss_value = torch.tensor(0.0)
+            t1 = time.time()
+            self.log("time:herit_loss", t1 - t0, on_step=True, on_epoch=False)
+            self.log(
+                "herit_loss",
+                herit_loss_value,
+                batch_size=sum([v.shape[1] for v in batch.edge_index_dict.values()]),
+                on_step=True,
+                on_epoch=True,
+            )
+        else:
+            herit_loss_value = torch.tensor(0.0)
         self.log(
             "nll_loss",
-            batch_nll_loss * self.nll_scale,
-            batch_size=sum([v.shape[1] for v in batch.edge_index_dict.values()]),
-            on_step=False,
-            on_epoch=True,
-        )
-        # Log per-batch (step) NLL in addition to per-epoch aggregation
-        self.log(
-            "nll_loss_step",
-            batch_nll_loss * self.nll_scale,
+            batch_nll_loss,
             batch_size=sum([v.shape[1] for v in batch.edge_index_dict.values()]),
             on_step=True,
-            on_epoch=False,
+            on_epoch=True,
         )
         self.log(
             "kl_div_loss",
-            batch_kl_div_loss,
+            batch_kl_div_loss / self.nll_scale,
             batch_size=sum([v.shape[1] for v in batch.edge_index_dict.values()]),
-            on_step=False,
+            on_step=True,
             on_epoch=True,
         )
-        loss = batch_nll_loss * self.nll_scale + batch_kl_div_loss
+        loss = batch_nll_loss + batch_kl_div_loss / self.nll_scale + herit_loss_value
         self.log(
             "loss",
             loss,
             batch_size=sum([v.shape[1] for v in batch.edge_index_dict.values()]),
-            on_step=False,
+            on_step=True,
             on_epoch=True,
         )
         return loss
 
     def validation_step(self, batch, batch_idx):
-        edge_attr_type, idx = batch
-        edge_attr_type = tuple(edge_attr_type)
-        batch = (
-            self.data.edge_type_subgraph([edge_attr_type])
-            .edge_subgraph({edge_attr_type: idx})
-            .to(self.device)
-        )
-
         self.eval()
         mu_dict, logstd_dict = self.encode(batch)
         z_dict = self.reparametrize(mu_dict, logstd_dict)
@@ -566,11 +691,11 @@ class LightningProxModel(L.LightningModule):
             batch.edge_index_dict,
             batch.edge_attr_dict,
             edgetype_loss_weight_dict=self.edgetype_loss_weight_dict,
-            get_metric=True,
         )
 
         if self.current_epoch >= self.n_no_kl:
             batch_kl_div_loss = self.kl_div_loss(
+                batch,
                 mu_dict,
                 logstd_dict,
                 batch.n_id_dict,
@@ -578,47 +703,59 @@ class LightningProxModel(L.LightningModule):
             )
         else:
             batch_kl_div_loss = 0.0
-        loss = batch_nll_loss * self.val_nll_scale + batch_kl_div_loss
         self.log(
             "val_nll_loss",
-            batch_nll_loss * self.val_nll_scale,
-            batch_size=sum([v.shape[1] for v in batch.edge_index_dict.values()]),
-            on_step=False,
-            on_epoch=True,
-        )
-        # Also log per-validation-step NLL (so we can monitor batch-level val NLL)
-        self.log(
-            "val_nll_loss_step",
-            batch_nll_loss * self.val_nll_scale,
+            batch_nll_loss,
             batch_size=sum([v.shape[1] for v in batch.edge_index_dict.values()]),
             on_step=True,
-            on_epoch=False,
+            on_epoch=True,
+        )
+        if self.herit_loss is not None:
+            if "peak" in batch.node_types:
+                pid = batch["peak"].n_id.cpu()
+                herit_loss_value = self.herit_loss_lam * self.herit_loss(
+                    mu_dict["peak"],
+                    pid,
+                )
+            else:
+                herit_loss_value = torch.tensor(0.0)
+            self.log(
+                "val_herit_loss",
+                herit_loss_value,
+                batch_size=sum([v.shape[1] for v in batch.edge_index_dict.values()]),
+                on_step=True,
+                on_epoch=True,
+            )
+        else:
+            herit_loss_value = torch.tensor(0.0)
+        loss = (
+            batch_nll_loss + batch_kl_div_loss / self.val_nll_scale + herit_loss_value
         )
         self.log(
             "val_nll_loss_monitored",
-            batch_nll_loss * self.val_nll_scale
+            batch_nll_loss
             + (torch.inf if self.current_epoch < self.n_kl_warmup * 2 else 0),
             batch_size=sum([v.shape[1] for v in batch.edge_index_dict.values()]),
-            on_step=False,
+            on_step=True,
             on_epoch=True,
         )
+
         self.log(
             "val_kl_div_loss",
-            batch_kl_div_loss,
+            batch_kl_div_loss / self.val_nll_scale,
             batch_size=sum([v.shape[1] for v in batch.edge_index_dict.values()]),
-            on_step=False,
+            on_step=True,
             on_epoch=True,
         )
         self.log(
             "val_loss",
             loss,
             batch_size=sum([v.shape[1] for v in batch.edge_index_dict.values()]),
-            on_step=False,
+            on_step=True,
             on_epoch=True,
         )
 
         self.validation_step_outputs.append(loss)
-
         return loss
 
     def mean_cell_neighbor_distance(self, k=50):
@@ -660,7 +797,7 @@ class LightningProxModel(L.LightningModule):
         optimizer = torch.optim.Adam(self.parameters(), lr=self.learning_rate)
         scheduler = ReduceLROnPlateau(
             optimizer,
-            patience=15,
+            patience=3,
         )
         # scheduler = CyclicLR(
         #     optimizer,

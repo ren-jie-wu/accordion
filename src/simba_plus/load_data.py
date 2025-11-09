@@ -3,8 +3,11 @@ from typing import Dict, Iterable
 import numpy as np
 import torch
 from torch_geometric.data import HeteroData
+import warnings
+
+warnings.simplefilter(action="ignore", category=FutureWarning)
 import anndata as ad
-from simba_plus.utils import _assign_node_id, _make_tensor
+from simba_plus.utils import _make_tensor
 import argparse
 
 
@@ -105,13 +108,13 @@ def make_sc_HetData(
         )
 
     for node_type in data.node_types:
-        data[node_type].x = torch.tensor(data[node_type].x, dtype=torch.float)
+        data[node_type].x = data[node_type].x.detach().clone().float()
     return data
 
 
 def load_from_path(path: str, device="cpu") -> HeteroData:
     data = torch.load(path, map_location=device, weights_only=False)
-    _assign_node_id(data)
+    data.generate_ids()
     _make_tensor(data, device=device)
     return data
 

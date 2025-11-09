@@ -4,31 +4,42 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "simba_plus"
-version = "0.1.1"
+version = "0.2.0"
 authors = [
-  { name="Jayoung Ryu", email="jayoungkimryu@gmail.com" },
-  { name="Junxi Feng", email="junxifeng0511@gmail.com"}
+    { name = "Jayoung Ryu", email = "jayoungkimryu@gmail.com" },
+    { name = "Junxi Feng", email = "junxifeng0511@gmail.com" }
 ]
 dependencies = [
-  "torch_geometric",
-  "scvi-tools",
-  "anndata",
-  "lightning",
-  "scikit-learn",
-  "scipy<1.15",
-  "matplotlib",
-  "seaborn",
-  "wandb",
-  "tables",
-  "papermill",
-  
-  # added
-  "pyranges",
-  "numpy",
-  "pandas",
-  "xgboost",
-  "joblib",
-  "tqdm",
+    "torch_geometric",
+    "scvi-tools",
+    "anndata",
+    "lightning",
+    "scikit-learn",
+    "scipy<1.15",
+    "matplotlib",
+    "seaborn",
+    "wandb",
+    "tables",
+    "papermill",
+    "pybedtools",
+    "bitarray",
+    "nose",
+    "pysam",
+    "python-dateutil",
+    "pytz",
+    "six",
+    "scipy",
+    "gseapy",
+    "pyranges",
+    "numpy",
+    "pandas",
+    "xgboost",
+    "joblib",
+    "tqdm",
+    "scikit-misc",
+    "kneed",
+    "pytest",
+    "pytest-ordering",
 ]
 description = "SIMBA+"
 readme = "README.md"
@@ -38,7 +49,6 @@ classifiers = [
     "Operating System :: OS Independent",
 ]
 license = "MIT"
-
 
 [project.urls]
 Homepage = "https://github.com/pinellolab/simba-plus"
@@ -50,3 +60,53 @@ Issues = "https://github.com/pinellolab/simba-plus/issues"
 [tool.setuptools]
 packages = ["simba_plus"]
 package-dir = {"" = "src"}
+
+# Black configuration
+[tool.black]
+line-length = 88
+target-version = ['py39']
+include = '\.pyi?$'
+extend-exclude = '''
+/(
+  # directories
+  \.eggs
+  | \.git
+  | \.hg
+  | \.mypy_cache
+  | \.tox
+  | \.venv
+  | build
+  | dist
+)/
+'''
+
+# isort configuration
+[tool.isort]
+profile = "black"
+multi_line_output = 3
+line_length = 88
+include_trailing_comma = true
+force_grid_wrap = 0
+use_parentheses = true
+ensure_newline_before_comments = true
+
+# pytest configuration
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+norecursedirs = ["src/ldsc/test", ".git", ".tox", "dist", "build", "*.egg"]
+python_files = ["test_*.py", "*_test.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = [
+    "-v",
+    "--tb=short",
+    "--strict-markers",
+]
+markers = [
+    "slow: marks tests as slow (deselect with '-m \"not slow\"')",
+    "integration: marks tests as integration tests",
+    "unit: marks tests as unit tests",
+    "order: marks tests for ordering with pytest-ordering",
+    "first: marks tests to run first",
+    "last: marks tests to run last",
+]

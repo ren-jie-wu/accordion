@@ -4,11 +4,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torch.distributions as D
 from scvi.distributions import NegativeBinomial
-
-# from dynot.probs import ZILN, ZIN, ZINB
-
-MAX_LOGSTD = 10
-EPS = 1e-6
+from simba_plus.constants import MIN_LOGSTD, MAX_LOGSTD, EPS
 
 
 class ProximityDecoder(nn.Module):
@@ -48,21 +44,13 @@ class NormalDataDecoder(ProximityDecoder):
 
     def __init__(
         self,
-        out_features: int,
-        n_batches: int = 1,
-        positive_scale=False,
-        scale_src=True,
     ) -> None:
         super().__init__()
-        self.positive_scale = positive_scale
-        self.scale_src = scale_src
 
     def forward(
         self,
         u: torch.Tensor,
         v: torch.Tensor,
-        src_size_factor,
-        dst_size_factor,
         src_scale,
         src_bias,
         src_std,
@@ -71,18 +59,13 @@ class NormalDataDecoder(ProximityDecoder):
         dst_std,
         # b: torch.Tensor, l: Optional[torch.Tensor]
     ) -> D.Normal:
-        if self.positive_scale:
-            if self.scale_src:
-                scale = F.softplus(src_scale) * F.softplus(dst_scale)
-            else:
-                scale = F.softplus(dst_scale)
-        else:
-            scale = src_scale * dst_scale
+        scale = F.softplus(src_scale) * F.softplus(dst_scale)
+
         cos = torch.nn.CosineSimilarity()
         loc = scale * cos(u, v) + src_bias + dst_bias
         # std = F.softplus(src_std + dst_std) + EPS
-        std = torch.exp(src_std + dst_std)
-        return D.Normal(loc, std, validate_args=True)
+        std = torch.exp(dst_std)
+        return D.Normal(loc, std)  # std, validate_args=True)
 
 
 class GammaDataDecoder(ProximityDecoder):
@@ -97,23 +80,10 @@ class GammaDataDecoder(ProximityDecoder):
         Number of batches
     """
 
-    def __init__(
-        self,
-        out_features: int,
-        n_batches: int = 1,
-        positive_scale=False,
-        scale_src=True,
-    ) -> None:
-        super().__init__()
-        self.positive_scale = positive_scale
-        self.scale_src = scale_src
-
     def forward(
         self,
         u: torch.Tensor,
         v: torch.Tensor,
-        src_size_factor,
-        dst_size_factor,
         src_scale,
         src_bias,
         src_std,
@@ -122,13 +92,9 @@ class GammaDataDecoder(ProximityDecoder):
         dst_std,
         # b: torch.Tensor, l: Optional[torch.Tensor]
     ) -> D.Gamma:
-        if self.positive_scale:
-            if self.scale_src:
-                scale = F.softplus(src_scale) * F.softplus(dst_scale)
-            else:
-                scale = F.softplus(dst_scale)
-        else:
-            scale = src_scale * dst_scale
+
+        scale = F.softplus(src_scale) * F.softplus(dst_scale)
+
         cos = torch.nn.CosineSimilarity()
         loc = torch.exp(scale * cos(u, v) + src_bias + dst_bias)  # a/b
         std = torch.exp(src_std + dst_std)  # a/(b^2)
@@ -150,15 +116,10 @@ class PoissonDataDecoder(ProximityDecoder):
         Number of batches
     """
 
-    def __init__(self, out_features: int, n_batches: int = 1) -> None:
-        super().__init__()
-
     def forward(
         self,
         u: torch.Tensor,
         v: torch.Tensor,
-        src_size_factor,
-        dst_size_factor,
         src_scale,
         src_bias,
         src_std,
@@ -185,23 +146,10 @@ class BernoulliDataDecoder(ProximityDecoder):
         Number of batches
     """
 
-    def __init__(
-        self,
-        out_features: int,
-        n_batches: int = 1,
-        positive_scale=False,
-        scale_src=True,
-    ) -> None:
-        super().__init__()
-        self.positive_scale = positive_scale
-        self.scale_src = scale_src
-
     def forward(
         self,
         u: torch.Tensor,
         v: torch.Tensor,
-        src_size_factor,
-        dst_size_factor,
         src_scale,
         src_bias,
         src_std,
@@ -211,58 +159,16 @@ class BernoulliDataDecoder(ProximityDecoder):
         # b: torch.Tensor, l: Optional[torch.Tensor]
     ) -> D.Normal:
         cos = torch.nn.CosineSimilarity()
-        if self.scale_src:
-            if self.positive_scale:
-                scale = F.softplus(src_scale) * F.softplus(dst_scale)
-            else:
-                scale = src_scale * dst_scale
-        else:
-            if self.positive_scale:
-                scale = F.softplus(dst_scale)
-            else:
-                scale = dst_scale
-        logit = scale * cos(u, v) + src_bias + dst_bias
-        return D.Bernoulli(logits=logit)
 
-
-class BetaDataDecoder(ProximityDecoder):
-    r"""
-    Normal data decoder
-
-    Parameters
-    ----------
-    out_features
-        Output dimensionality
-    n_batches
-        Number of batches
-    """
-
-    def __init__(self, out_features: int, n_batches: int = 1) -> None:
-        super().__init__()
-
-    def forward(
-        self,
-        u: torch.Tensor,
-        v: torch.Tensor,
-        src_size_factor,
-        dst_size_factor,
-        src_scale,
-        src_bias,
-        src_std,
-        dst_scale,
-        dst_bias,
-        dst_std,
-        # b: torch.Tensor, l: Optional[torch.Tensor]
-    ) -> D.Normal:
         scale = F.softplus(src_scale) * F.softplus(dst_scale)
-        cos = torch.nn.CosineSimilarity()
-        loc = torch.sigmoid(scale * cos(u, v) + src_bias + dst_bias)
-        a0 = torch.exp(src_std + dst_std)
-        # print(f"@LOC:{loc}, {a0} (u.shape={u.shape}, v.shape={v.shape})")
-        # import pdb; pdb.set_trace()
-        loc = torch.clamp(loc, min=1e-6, max=1 - 1e-6)
 
-        return D.Beta(loc * a0, (1 - loc) * a0)
+        logit = scale * cos(u, v) + src_bias + dst_bias
+        if torch.any(torch.isnan(logit)):
+            nan_idx = torch.isnan(logit).nonzero(as_tuple=True)[0]
+            print(
+                f"NaN in logit: u={u[nan_idx]}, v={v[nan_idx]}, src_scale={src_scale[nan_idx]}, dst_scale={dst_scale[nan_idx]}, src_bias={src_bias[nan_idx]}, dst_bias={dst_bias[nan_idx]}, src_std={src_std[nan_idx]}, dst_std={dst_std[nan_idx]}"
+            )
+        return D.Bernoulli(logits=logit)
 
 
 class NegativeBinomialDataDecoder(ProximityDecoder):
@@ -277,23 +183,10 @@ class NegativeBinomialDataDecoder(ProximityDecoder):
         Number of batches
     """
 
-    def __init__(
-        self,
-        out_features: int,
-        n_batches: int = 1,
-        positive_scale=False,
-        scale_src=True,
-    ) -> None:
-        super().__init__()
-        self.positive_scale = positive_scale
-        self.scale_src = scale_src
-
     def forward(
         self,
         u: torch.Tensor,
         v: torch.Tensor,
-        src_size_factor,
-        dst_size_factor,
         src_scale,
         src_bias,
         src_std,
@@ -302,14 +195,10 @@ class NegativeBinomialDataDecoder(ProximityDecoder):
         dst_std,
         # b: torch.Tensor, l: Optional[torch.Tensor]
     ) -> D.Normal:
-        if self.positive_scale:
-            if self.scale_src:
-                scale = F.softplus(src_scale) * F.softplus(dst_scale)
-            else:
-                scale = F.softplus(dst_scale)
-        else:
-            scale = src_scale * dst_scale
+        scale = F.softplus(src_scale) * F.softplus(dst_scale)
+
         cos = torch.nn.CosineSimilarity()
         loc = torch.exp(scale * cos(u, v) + src_bias + dst_bias)
-        std = torch.exp(src_std + dst_std)
-        return NegativeBinomial(mu=loc, theta=std, validate_args=True)
+        # std = torch.exp(dst_std)
+        std = torch.exp((src_std + dst_std).clamp(MIN_LOGSTD, MAX_LOGSTD))
+        return NegativeBinomial(mu=loc, theta=std)  # std, validate_args=True)

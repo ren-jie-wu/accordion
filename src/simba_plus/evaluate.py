@@ -1,5 +1,6 @@
 from typing import Dict, Optional
 import os
+from functools import partial
 from typing import Literal
 import pickle as pkl
 from argparse import ArgumentParser
@@ -12,23 +13,20 @@ import torch_geometric
 from torch.utils.data import DataLoader
 from torch_geometric.utils import negative_sampling, to_dense_adj
 from torch_geometric.typing import EdgeType
-
+from torch_geometric.transforms.to_device import ToDevice
 from tqdm import tqdm
-from simba_plus.loader import CustomIndexDataset
+from simba_plus.loader import CustomMultiIndexDataset, collate
 from simba_plus.model_prox import LightningProxModel
 from simba_plus.evaluation_utils import (
     compute_reconstruction_gene_metrics,
     compute_classification_metrics,
 )
+from simba_plus.utils import setup_logging
+import logging
 
 ## Evaluate reconstruction quality
 
 torch_geometric.seed_everything(2025)
-
-
-def collate(data):
-    types, idxs = zip(*data)
-    return tuple(types[0]), torch.tensor(idxs)
 
 
 def decode(
@@ -44,9 +42,7 @@ def decode(
         batch,
         z_dict,
         pos_edge_index_dict,
-        scale_dict=model.scale_dict,
-        bias_dict=model.bias_dict,
-        std_dict=model.std_dict,
+        *model.aux_params(batch, {k: v.cpu() for k, v in pos_edge_index_dict.items()}),
     )
     neg_edge_index_dict = {}
     for edge_type, pos_edge_index in pos_edge_index_dict.items():
@@ -74,9 +70,7 @@ def decode(
         batch,
         z_dict,
         neg_edge_index_dict,
-        scale_dict=model.scale_dict,
-        bias_dict=model.bias_dict,
-        std_dict=model.std_dict,
+        *model.aux_params(batch, {k: v.cpu() for k, v in neg_edge_index_dict.items()}),
     )
     return pos_dist_dict, neg_edge_index_dict, neg_dist_dict
 
@@ -88,28 +82,29 @@ def get_gexp_metrics(
     batch_size: Optional[int] = None,
     n_negative_samples: Optional[int] = None,
     device: str = "cpu",
+    num_workers: int = 2,
 ):
     if batch_size is None:
         batch_size = int(1e6)
+    gexp_edge_type = ("cell", "expresses", "gene")
     gexp_mat = (
         to_dense_adj(
-            eval_data["cell", "expresses", "gene"].edge_index,
+            eval_data[gexp_edge_type].edge_index,
         )[0, : eval_data["cell"].num_nodes, : eval_data["gene"].num_nodes]
         .cpu()
         .numpy()
     )
     gexp_mean = gexp_mat.mean(axis=0)
     gexp_norm = gexp_mat / (gexp_mean + 1e-6)
-    gexp_dataset = CustomIndexDataset(
-        ("cell", "expresses", "gene"),
-        torch.arange(eval_data["cell", "expresses", "gene"].num_edges),
+    gexp_dataset = CustomMultiIndexDataset(
+        [gexp_edge_type],
+        [torch.arange(eval_data[gexp_edge_type].edge_index.shape[1])],
     )
     gexp_loader = DataLoader(
         gexp_dataset,
         batch_size=batch_size,
-        collate_fn=collate,
-        shuffle=False,
-        pin_memory_device=device,
+        collate_fn=partial(collate, data=ToDevice("cpu")(eval_data)),
+        num_workers=num_workers,
     )
     with torch.no_grad():
         model.eval()
@@ -119,29 +114,21 @@ def get_gexp_metrics(
         neg_stds = []
         neg_idx = []
         for gene_batch in tqdm(gexp_loader):
-            gene_edge_type, gene_label_index = gene_batch
-            gene_batch = eval_data.edge_subgraph(
-                {
-                    gene_edge_type: gene_label_index.to(device),
-                }
-            )
+            gene_batch = ToDevice(device)(gene_batch)
             if n_negative_samples is None:
-                n_negative_samples = (
-                    len(gene_batch["cell", "expresses", "gene"].edge_index[0]) // 10
-                )
+                n_negative_samples = len(gene_batch[gexp_edge_type].edge_index[0]) // 10
             pos_dist_dict, neg_edge_index_dict, neg_dist_dict = decode(
                 model, gene_batch, train_index, n_negative_samples=n_negative_samples
             )
-            means.append(pos_dist_dict[("cell", "expresses", "gene")].mean)
-            stds.append(pos_dist_dict[("cell", "expresses", "gene")].stddev)
-            neg_means.append(neg_dist_dict[("cell", "expresses", "gene")].mean)
-            neg_stds.append(neg_dist_dict[("cell", "expresses", "gene")].stddev)
-            neg_idx.append(neg_edge_index_dict[("cell", "expresses", "gene")])
-            print("decoded gexp")
+            means.append(pos_dist_dict[gexp_edge_type].mean)
+            stds.append(pos_dist_dict[gexp_edge_type].stddev)
+            neg_means.append(neg_dist_dict[gexp_edge_type].mean)
+            neg_stds.append(neg_dist_dict[gexp_edge_type].stddev)
+            neg_idx.append(neg_edge_index_dict[gexp_edge_type])
         gexp_pred_mu = torch.cat(means + neg_means)
         gexp_pred_std = torch.cat(stds + neg_stds)
         gexp_neg_idx = torch.cat(neg_idx, dim=1)
-    pos_idxs = eval_data["cell", "expresses", "gene"].edge_index[:, gexp_dataset.index]
+    pos_idxs = eval_data[gexp_edge_type].edge_index[:, gexp_dataset.indexes[0]]
     all_idxs = torch.cat([pos_idxs, gexp_neg_idx], dim=1)
     test_dense_mat = scipy.sparse.coo_matrix(
         (
@@ -179,18 +166,20 @@ def get_accessibility_metrics(
     batch_size: Optional[int] = None,
     n_negative_samples: Optional[int] = None,
     device: str = "cpu",
+    num_workers: int = 2,
 ):
     if batch_size is None:
         batch_size = int(1e6)
+    acc_edge_type = ("cell", "has_accessible", "peak")
+    acc_dataset = CustomMultiIndexDataset(
+        [acc_edge_type],
+        [torch.arange(eval_data[acc_edge_type].edge_index.shape[1])],
+    )
     acc_loader = DataLoader(
-        CustomIndexDataset(
-            ("cell", "has_accessible", "peak"),
-            torch.arange(eval_data["cell", "has_accessible", "peak"].num_edges),
-        ),
+        acc_dataset,
         batch_size=batch_size,
-        collate_fn=collate,
-        shuffle=False,
-        pin_memory_device=device,
+        collate_fn=partial(collate, data=ToDevice("cpu")(eval_data)),
+        num_workers=num_workers,
     )
     with torch.no_grad():
         model.eval()
@@ -198,13 +187,7 @@ def get_accessibility_metrics(
         preds = []
         edge_idxs = []
         for acc_batch in tqdm(acc_loader):
-            acc_edge_type, acc_label_index = acc_batch
-            acc_edge_type = tuple(acc_edge_type)
-            acc_batch = eval_data.edge_type_subgraph(acc_edge_type).edge_subgraph(
-                {
-                    acc_edge_type: acc_label_index.to(device),
-                }
-            )
+            acc_batch = ToDevice(device)(acc_batch)
             edge_idxs.append(acc_batch[acc_edge_type].edge_index.cpu())
             pos_dist_dict, neg_edge_index_dict, neg_dist_dict = decode(
                 model, acc_batch, data, n_negative_samples=n_negative_samples
@@ -214,14 +197,8 @@ def get_accessibility_metrics(
                 (
                     torch.cat(
                         [
-                            acc_batch[
-                                ("cell", "has_accessible", "peak")
-                            ].edge_attr.cpu(),
-                            torch.zeros(
-                                neg_edge_index_dict[
-                                    ("cell", "has_accessible", "peak")
-                                ].shape[1]
-                            ),
+                            acc_batch[acc_edge_type].edge_attr.cpu(),
+                            torch.zeros(neg_edge_index_dict[acc_edge_type].shape[1]),
                         ],
                         dim=0,
                     )
@@ -233,8 +210,8 @@ def get_accessibility_metrics(
                 (
                     torch.cat(
                         [
-                            pos_dist_dict[("cell", "has_accessible", "peak")].logits,
-                            neg_dist_dict[("cell", "has_accessible", "peak")].logits,
+                            pos_dist_dict[acc_edge_type].logits,
+                            neg_dist_dict[acc_edge_type].logits,
                         ],
                         dim=0,
                     )
@@ -250,7 +227,7 @@ def get_accessibility_metrics(
             torch.sigmoid(acc_pred),
             plot=False,
         )
-        print(acc_pred.shape)
+
         metrics["pred"] = scipy.sparse.coo_matrix(
             (
                 acc_pred.detach().cpu().numpy(),
@@ -269,11 +246,12 @@ def eval(
     batch_size: Optional[int] = None,
     n_negative_samples: Optional[int] = None,
     index_path: Optional[str] = None,
+    logger=None,
 ):
     data = torch.load(data, weights_only=False)
     data.generate_ids()
     data.to(device)
-    if index_path is not None:
+    if index_path is None:
         index_path = f"{os.path.dirname(model_path)}/data_idx.pkl"
     with open(index_path, "rb") as f:
         data_idx = pkl.load(f)
@@ -286,12 +264,13 @@ def eval(
     eval_data = data.edge_subgraph(
         {tuple(k.split("__")): v.to(device) for k, v in idx_dict.items()}
     )
-    if isinstance(eval_data["cell"].batch, np.ndarray):
-        eval_data["cell"].batch = torch.tensor(eval_data["cell"].batch).to(device)
+    if hasattr(eval_data["cell"], "batch"):
+        if isinstance(eval_data["cell"].batch, np.ndarray):
+            eval_data["cell"].batch = torch.tensor(eval_data["cell"].batch).to(device)
     model = LightningProxModel.load_from_checkpoint(model_path, weights_only=True).to(
         device
     )
-    print("loaded model")
+    logger.info(f"Loaded model from {model_path}.")
     model.eval()
     if eval_split == "val":
         train_index = {
@@ -321,12 +300,7 @@ def eval(
             .to(device)
             for k, v in data_idx["test"].items()
         }
-        print(train_index)
 
-    possible_edge_types = [
-        ("cell", "has_accessible", "peak"),
-        ("cell", "expresses", "gene"),
-    ]
     if ("cell", "expresses", "gene") in eval_data.edge_types:
         metric_dict["gexp"] = get_gexp_metrics(
             model,
@@ -385,10 +359,91 @@ def add_argument(parser: ArgumentParser) -> ArgumentParser:
         default="cuda" if torch.cuda.is_available() else "cpu",
         help="Device to run the evaluation on.",
     )
+    parser.add_argument(
+        "--rerun",
+        action="store_true",
+        help="Rerun the evaluation.",
+    )
     return parser
 
 
-def main(args):
+def pretty_print(
+    metric_dict,
+    logger,
+    show_histogram=True,
+    histogram_width=50,
+):
+    """
+    Pretty print metrics dictionary focusing on scalar and array metrics.
+
+    Parameters
+    ----------
+    metric_dict : dict
+        Dictionary containing metrics for different tasks
+    show_histogram : bool, default True
+        Whether to show ASCII histogram for array metrics
+    histogram_width : int, default 50
+        Width of the ASCII histogram
+    """
+    output_string = "\n"
+    output_string += "=" * 80 + "\n"
+    output_string += "EVALUATION METRICS SUMMARY" + "\n"
+    output_string += "=" * 80 + "\n"
+
+    for task_name, metrics in metric_dict.items():
+        output_string += f"\n📊 {task_name.upper()} METRICS" + "\n"
+        output_string += "-" * 60 + "\n"
+
+        # Separate metrics by type
+        scalar_metrics = {}
+        array_metrics = {}
+
+        for metric_name, value in metrics.items():
+            if metric_name == "pred":
+                continue  # Skip prediction matrices
+            elif isinstance(value, np.ndarray):
+                array_metrics[metric_name] = value
+            else:
+                scalar_metrics[metric_name] = value
+
+        # Print scalar metrics first
+        if scalar_metrics:
+            output_string += "🔢 Scalar Metrics:" + "\n"
+            for metric_name, value in scalar_metrics.items():
+                if isinstance(value, (np.floating, float)):
+                    output_string += f"   {metric_name:<30}: {value:.6f}" + "\n"
+                else:
+                    output_string += f"   {metric_name:<30}: {value}" + "\n"
+
+        # Print array metrics with comprehensive statistics
+        if array_metrics:
+            output_string += f"\n📈 Array Metrics:" + "\n"
+            for metric_name, array in array_metrics.items():
+                output_string += f"\n   {metric_name}:" + "\n"
+                output_string += f"   {'─' * (len(metric_name) + 3)}" + "\n"
+
+                # Basic statistics
+                output_string += f"   Mean:       {np.mean(array):.6f}" + "\n"
+                output_string += f"   Std:        {np.std(array):.6f}" + "\n"
+                output_string += f"   Min:        {np.min(array):.6f}" + "\n"
+                output_string += f"   Max:        {np.max(array):.6f}" + "\n"
+                output_string += f"   Median:     {np.median(array):.6f}" + "\n"
+
+    output_string += "\n" + "=" * 80 + "\n"
+    logger.info(output_string)
+
+
+def main(args, logger=None):
+    if not logger:
+        logger = setup_logging(
+            "simba+evaluate", log_dir=os.path.dirname(args.model_path)
+        )
+    metric_dict_path = f"{os.path.dirname(args.model_path)}/pred_dict.pkl"
+    if os.path.exists(metric_dict_path):
+        with open(metric_dict_path, "rb") as file:
+            metric_dict = pkl.load(file)
+        pretty_print(metric_dict, logger=logger)
+        return
     metric_dict = eval(
         args.model_path,
         args.data_path,
@@ -396,13 +451,15 @@ def main(args):
         batch_size=args.batch_size,
         n_negative_samples=args.n_negative_samples,
         device=args.device,
+        logger=logger,
     )
-    print(metric_dict)
+    pretty_print(metric_dict, logger=logger)
     with open(f"{os.path.dirname(args.model_path)}/pred_dict.pkl", "wb") as file:
         pkl.dump(metric_dict, file)
 
 
 if __name__ == "__main__":
     parser = ArgumentParser()
+    parser = add_argument(parser)
     args = parser.parse_args()
     main(args)

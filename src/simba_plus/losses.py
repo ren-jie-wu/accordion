@@ -173,6 +173,41 @@ class HSIC(nn.Module):
         return hsic_total
 
 
+class SumstatResidualLoss(nn.Module):
+    """
+    Constrain peak loading to maximally explain the sumstat residuals.
+    """
+
+    def __init__(
+        self,
+        residuals: torch.Tensor,
+        device: torch.device = torch.device("cpu"),
+        max_samples: int = 1000,
+        n_factors: int = 50,
+        lam: float = 1.0,
+    ):
+        """
+        Initialize SumstatResidualLoss with residuals.
+
+        Args:
+            residuals (torch.Tensor): Residuals tensor
+        """
+        super(SumstatResidualLoss, self).__init__()
+        if residuals.ndim == 1:
+            residuals = residuals[:, None]
+        self.y = torch.tensor(residuals, device=device)
+        print(self.y)
+        self.max_samples = max_samples
+        self.coef = nn.Linear(n_factors, self.y.shape[1], bias=False).to(device)
+        self.lam = lam
+
+    def forward(self, L, idx):
+        y = self.y[idx, :]  # n_idx, n_sumstats
+        L_normed = L / torch.norm(L, dim=0, keepdim=True)  # n_idx, n_factors
+        loss = (y - self.coef(L_normed)).pow(2).mean(axis=1).sum()
+        return loss * self.lam
+
+
 def weighted_mse_loss(pred, target, weight=None):
     weight = 1.0 if weight is None else weight[target].to(pred.dtype)
     return (weight * (pred - target.to(pred.dtype)).pow(2)).mean()

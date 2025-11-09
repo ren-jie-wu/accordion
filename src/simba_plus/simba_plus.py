@@ -13,7 +13,7 @@ import simba_plus.heritability.create_report as create_heritability_report
 def main():
     if len(sys.argv) < 2:
         print("Usage: simba+ <subcommand> [args]")
-        print("Available subcommands: load_data, train")
+        print("Available subcommands: load_data, train, eval, heritability")
         sys.exit(1)
 
     parser = argparse.ArgumentParser(
