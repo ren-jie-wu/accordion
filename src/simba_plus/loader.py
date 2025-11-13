@@ -1,7 +1,11 @@
 import torch
 from torch.utils.data import Dataset
+import torch_geometric
 from torch_geometric.typing import EdgeType
 from torch_geometric.transforms.remove_isolated_nodes import RemoveIsolatedNodes
+from torch_geometric.transforms.to_device import ToDevice
+from copy import copy
+import pickle as pkl
 
 
 class CustomIndexDataset(Dataset):
@@ -23,56 +27,128 @@ class CustomIndexDataset(Dataset):
 class CustomMultiIndexDataset(Dataset):
     def __init__(
         self,
-        edge_attr_types: list[EdgeType],
-        indexes: list[torch.Tensor],
+        pos_idx_dict: dict[EdgeType, torch.Tensor],
+        data: torch_geometric.data.HeteroData,
+        negative_sampling_fold: int = 1,
     ):
-        assert len(edge_attr_types) == len(
-            indexes
-        ), "edge_attr_types and indexes must have the same length"
-        self.edge_attr_types = edge_attr_types
-        self.indexes = indexes
-        self.lengths = [len(index) for index in indexes]
+        assert len(pos_idx_dict) > 0, "pos_idx_dict must not be empty"
+        self.pos_idx_dict = pos_idx_dict
+        self.edge_types = list(pos_idx_dict.keys())
+        self.lengths = [
+            len(self.pos_idx_dict[edge_type]) for edge_type in self.edge_types
+        ]
         self.total_length = sum(self.lengths)
-        self.num_types = len(self.edge_attr_types)
+        self.num_types = len(self.edge_types)
+        self.setup_count = 0
+        self.negative_sampling_fold = negative_sampling_fold
+        self.data = ToDevice("cpu")(data)
+
+    def sample_negative(self):
+        """Add true negative edges' index"""
+        torch_geometric.seed.seed_everything(self.setup_count)
+        self.setup_count += 1
+        self.full_data = copy(self.data)
+        if self.negative_sampling_fold > 0:
+            self.edge_index_dict = {}
+            for edge_type in self.edge_types:
+                src, _, dst = edge_type
+                neg_edge_index = torch_geometric.utils.negative_sampling(
+                    self.data[edge_type].edge_index,
+                    num_nodes=(
+                        self.data[src].num_nodes,
+                        self.data[dst].num_nodes,
+                    ),
+                    num_neg_samples=len(self.pos_idx_dict[edge_type])
+                    * self.negative_sampling_fold,
+                )
+                self.full_data[edge_type].edge_index = torch.cat(
+                    [self.data[edge_type].edge_index, neg_edge_index], dim=1
+                )
+                self.full_data[edge_type].edge_attr = torch.cat(
+                    [
+                        self.data[edge_type].edge_attr,
+                        torch.zeros(
+                            neg_edge_index.size(1),
+                            dtype=self.data[edge_type].edge_attr.dtype,
+                            device=self.data[edge_type].edge_attr.device,
+                        ),
+                    ],
+                )
+                if hasattr(self.full_data[edge_type], "e_id"):
+                    del self.full_data[edge_type].e_id  # Remove eid to avoid confusion
+                self.edge_index_dict[edge_type] = torch.cat(
+                    [
+                        self.pos_idx_dict[edge_type],  # v114 selected all edges
+                        # torch.arange(self.data[edge_type].edge_index.size(1)),
+                        torch.arange(
+                            self.data[edge_type].edge_index.size(1),
+                            (
+                                self.data[edge_type].edge_index.size(1)
+                                + neg_edge_index.size(1)
+                            ),
+                            dtype=torch.long,
+                            device=self.pos_idx_dict[edge_type].device,
+                        ),
+                    ],
+                    dim=0,
+                )
+        else:
+            self.edge_index_dict = copy(self.pos_idx_dict)
+        self.lengths = [
+            len(self.edge_index_dict[edge_type]) for edge_type in self.edge_types
+        ]
+        self.total_length = sum(self.lengths)
         perm_idx = torch.randperm(self.total_length)
         self.type_assignments = torch.cat(
             [torch.full((length,), i) for i, length in enumerate(self.lengths)]
         )[perm_idx]
-        self.type_idxs = torch.zeros(len(self.lengths), dtype=torch.long)
-        self.setup_count = 0
-
-    # def setup(self):
-    #     print(f"setup called {self.setup_count + 1} times")
-    #     self.setup_count += 1
-    #     perm_idx = torch.randperm(
-    #         self.total_length, generator=torch.Generator().manual_seed(self.setup_count)
-    #     )
-    #     self.type_assignments = torch.cat(
-    #         [torch.full((length,), i) for i, length in enumerate(self.lengths)]
-    #     )[perm_idx]
-    #     self.type_idxs = torch.zeros(len(self.lengths), dtype=torch.long)
+        self.edgetype_permuted_idx = {
+            k: v[torch.randperm(len(v))] for k, v in self.edge_index_dict.items()  #
+        }
+        self.all_permuted_idx = []
+        edgetype_counters = [0] * len(self.edge_types)
+        for i in range(self.total_length):
+            type_idx = self.type_assignments[i].item()
+            edge_type = self.edge_types[type_idx]
+            edge_idx = edgetype_counters[type_idx]
+            self.all_permuted_idx.append(
+                self.edgetype_permuted_idx[edge_type][edge_idx].item()
+            )
+            edgetype_counters[type_idx] += 1
 
     def __len__(self):
         return self.total_length
 
     def __getitem__(self, idx):
-        type_idx = self.type_assignments[idx]
-        sample_idx = self.type_idxs[type_idx]
-        res = self.edge_attr_types[type_idx], self.indexes[type_idx][sample_idx]
-        self.type_idxs[type_idx] += 1
+        edge_type = self.edge_types[self.type_assignments[idx]]
+        sample_idx = self.all_permuted_idx[idx]
+        res = (
+            edge_type,
+            sample_idx,
+            self.full_data,
+        )
         return res
 
 
-def collate(idx, data):
-    batch = {}
-    for d in idx:
-        if d[0] not in batch:
-            batch[d[0]] = [d[1]]
+def collate(batches):
+    graph_batch = {}
+    full_data = batches[0][2]
+    # pkl.dump(full_data, open(".tmp_debug_full_data.pkl", "wb"))
+    for batch in batches:
+        edge_type, edge_index, _ = batch
+        if edge_type not in graph_batch:
+            graph_batch[edge_type] = [edge_index]
         else:
-            batch[d[0]].append(d[1])
-    return data  # data.edge_subgraph({k: torch.tensor(v) for k, v in batch.items()})
+            graph_batch[edge_type].append(edge_index)
 
-
-# RemoveIsolatedNodes()(
-#         data.edge_subgraph({k: torch.tensor(v) for k, v in batch.items()})
-#     )
+    dat_return = RemoveIsolatedNodes()(
+        full_data.edge_subgraph(
+            {
+                k: torch.tensor(sorted(v), dtype=torch.long)
+                for k, v in graph_batch.items()
+            }
+        )
+    )
+    # pkl.dump(dat_return, open(".tmp_debug_loader.pkl", "wb"))
+    # exit(0)
+    return RemoveIsolatedNodes()(dat_return)

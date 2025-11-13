@@ -12,14 +12,14 @@ class TransEncoder(torch.nn.Module):
         **kwargs,
     ):
         super().__init__()
-        self.__mu_dict__ = torch.nn.ParameterDict(
-            {
-                node_type: torch.nn.Parameter(
-                    torch.randn(data.x_dict[node_type].shape[0], n_latent_dims)
-                )
-                for node_type in data.node_types
-            }
-        )
+        # better initialization: create empty parameters and use a controlled initializer
+        self.__mu_dict__ = torch.nn.ParameterDict()
+        for node_type in data.node_types:
+            num_nodes = data.x_dict[node_type].shape[0]
+            p = torch.nn.Parameter(torch.empty(num_nodes, n_latent_dims))
+            # stable small normal init (you can swap to xavier_uniform_ if preferred)
+            torch.nn.init.normal_(p, mean=0.0, std=1)
+            self.__mu_dict__[node_type] = p
         self.__logstd_dict__ = torch.nn.ParameterDict(
             {
                 node_type: torch.nn.Parameter(

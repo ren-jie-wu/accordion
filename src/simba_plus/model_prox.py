@@ -11,7 +11,8 @@ from torch_geometric.transforms.remove_isolated_nodes import RemoveIsolatedNodes
 from torch_geometric.transforms.to_device import ToDevice
 from simba_plus.encoders import TransEncoder
 from simba_plus.constants import MIN_LOGSTD, MAX_LOGSTD
-from simba_plus.utils import negative_sampling
+
+# from simba_plus.utils import negative_sampling
 
 # from torch_geometric.utils import negative_sampling
 from simba_plus.losses import bernoulli_kl_loss
@@ -34,6 +35,7 @@ class AuxParams(nn.Module):
     def __init__(self, data: HeteroData, edgetype_specific: bool = True) -> None:
         super().__init__()
         # Batch correction for RNA-seq data
+        self.noise = False
         self.bias_dict = nn.ParameterDict()
         self.logscale_dict = nn.ParameterDict()
         self.std_dict = nn.ParameterDict()
@@ -74,10 +76,11 @@ class AuxParams(nn.Module):
             if self.use_batch:
                 n_batches = len(data["cell"].batch.unique())
                 self.logscale_dict[dst_key] = nn.Parameter(
-                    torch.zeros(
+                    torch.ones(
                         (n_batches, data[dst].num_nodes),
                         # device=self.device,
                     )
+                    * 0.1
                 )
                 self.bias_dict[dst_key] = nn.Parameter(
                     torch.zeros(
@@ -176,12 +179,46 @@ class AuxParams(nn.Module):
         return -0.5 * weighted_sum(kls, weight)
 
     def batched(self, param, param_logstd):
+        return param
         return_param = param
-        if self.training:
+        if self.noise:
             return_param = return_param + torch.randn_like(param_logstd) * torch.exp(
                 param_logstd
             )
         return return_param
+
+    def regularization_loss(self, batch):
+        l = torch.tensor(0.0, device=next(self.parameters()).device)
+        for edge_type in batch.edge_types:
+            src_type, _, dst_type = edge_type
+
+            (
+                src_key,
+                dst_key,
+            ) = self.get_keys(src_type, dst_type, edge_type)
+
+            src_node_id = batch[src_type].n_id
+            l += (self.logscale_dict[src_key][src_node_id]).pow(2).sum()
+            l += (self.bias_dict[src_key][src_node_id]).pow(2).sum()
+            l += (self.std_dict[src_key][src_node_id]).pow(2).sum()
+
+            if self.use_batch:
+                batches = batch["cell"].batch[batch[edge_type].edge_index[0]].long()
+                dst_node_id = batch[dst_type].n_id[batch[edge_type].edge_index[1]]
+
+                unique_index = torch.unique(torch.stack([batches, dst_node_id]), dim=0)
+                batches = unique_index[0, :]  # because batch 0 is baseline
+                dst_node_id = unique_index[1, :]
+
+                l += (self.logscale_dict[dst_key][batches, dst_node_id]).pow(2).sum()
+                l += (self.bias_dict[dst_key][batches, dst_node_id]).pow(2).sum()
+                l += (self.std_dict[dst_key][batches, dst_node_id]).pow(2).sum()
+            else:
+                dst_node_id = batch[dst_type].n_id
+                l += (self.logscale_dict[dst_key][dst_node_id]).pow(2).sum()
+                l += (self.bias_dict[dst_key][dst_node_id]).pow(2).sum()
+                l += (self.std_dict[dst_key][dst_node_id]).pow(2).sum()
+        return l
 
     def forward(self, batch, edge_index_dict):
         src_logscale_dict, src_bias_dict, src_std_dict = {}, {}, {}
@@ -204,7 +241,7 @@ class AuxParams(nn.Module):
                 batches = batch["cell"].batch[edge_index[0]].long()
                 dst_logscale_dict[edge_type] = self.batched(
                     self.logscale_dict[dst_key],
-                    self.scale_logstd_dict[dst_key],
+                    self.logscale_logstd_dict[dst_key],
                 )[batches, dst_node_id]
                 dst_bias_dict[edge_type] = self.batched(
                     self.bias_dict[dst_key], self.bias_logstd_dict[dst_key]
@@ -256,13 +293,7 @@ class AuxParams(nn.Module):
             if self.use_batch:
                 batches = batch["cell"].batch[edge_index[0]].long()
                 dst_node_id = batch[dst_type].n_id[edge_index[1]]
-                # obtain unique index
 
-                # sub_idx = torch.where(batches != 0)[0]
-                # if len(sub_idx) == 0:
-                #     continue
-                # batches = batches[sub_idx]
-                # dst_node_id = dst_node_id[sub_idx]
                 unique_index = torch.unique(torch.stack([batches, dst_node_id]), dim=0)
 
                 batches = unique_index[0, :]  # because batch 0 is baseline
@@ -286,6 +317,7 @@ class LightningProxModel(L.LightningModule):
     def __init__(
         self,
         data: HeteroData,
+        logger=None,
         encoder_class: torch.nn.Module = TransEncoder,
         n_latent_dims: int = 50,
         decoder_class: torch.nn.Module = RelationalEdgeDistributionDecoder,
@@ -296,8 +328,8 @@ class LightningProxModel(L.LightningModule):
         hsic: Optional[nn.Module] = None,
         herit_loss: Optional[nn.Module] = None,
         herit_loss_lam: float = 1,
-        n_no_kl: int = 10,
-        n_kl_warmup: int = 1,
+        n_no_kl: int = 30,
+        n_kl_warmup: int = 50,
         nll_scale: float = 1.0,
         val_nll_scale: float = 1.0,
         learning_rate=1e-2,
@@ -305,11 +337,13 @@ class LightningProxModel(L.LightningModule):
         nonneg=False,
         reweight_rarecell: bool = False,
         reweight_rarecell_neighbors: Optional[int] = None,
+        verbose: bool = False,
     ):
         super().__init__()
         self.save_hyperparameters()
         self.nonneg = nonneg
         self.data = data
+        self.logger2 = logger
         self.learning_rate = learning_rate
         self.encoder = encoder_class(
             data,
@@ -347,6 +381,7 @@ class LightningProxModel(L.LightningModule):
             / len(data[edgetype].edge_index[0])
             for edgetype in self.edge_types
         }
+        print(self.edgetype_loss_weight_dict)
 
         self.node_weights_dict = node_weights_dict
         self.herit_loss = herit_loss
@@ -355,6 +390,7 @@ class LightningProxModel(L.LightningModule):
         self.num_neg_samples_fold = num_neg_samples_fold
         self.validation_step_outputs = []
         self.aux_params = AuxParams(data, edgetype_specific=edgetype_specific)
+        self.verbose = verbose
 
     def on_train_start(self):
         self.node_weights_dict = {
@@ -376,12 +412,14 @@ class LightningProxModel(L.LightningModule):
         out_dict = {}
         assert mu_dict.keys() == logstd_dict.keys()
         for node_type in mu_dict.keys():
-            if self.training:
+            if (
+                self.training and self.current_epoch > self.n_no_kl
+            ):  # Start reparameterization later
                 out_dict[node_type] = mu_dict[node_type] + torch.randn_like(
                     logstd_dict[node_type]
                 ) * torch.exp(logstd_dict[node_type])
             else:
-                out_dict[node_type] = mu_dict[node_type]
+                out_dict[node_type] = mu_dict[node_type]  # Use mean only initially
         return out_dict
 
     def relational_recon_loss(
@@ -391,7 +429,7 @@ class LightningProxModel(L.LightningModule):
         pos_edge_index_dict: Dict[EdgeType, Tensor],
         pos_edge_weight_dict: Dict[EdgeType, Tensor],
         neg_edge_index_dict: Optional[Dict[EdgeType, Tensor]] = None,
-        neg_sample=True,
+        neg_sample=False,
         plot=False,
         get_metric=False,
     ) -> Tuple[Dict[EdgeType, Tensor], Dict[EdgeType, Tensor], Dict]:
@@ -412,35 +450,6 @@ class LightningProxModel(L.LightningModule):
             **self.aux_params(batch, pos_edge_index_dict),
         )
 
-        if neg_sample:
-            if neg_edge_index_dict is None:
-                neg_edge_index_dict = {}
-                for edge_type, pos_edge_index in pos_edge_index_dict.items():
-                    if len(pos_edge_index) == 0:
-                        continue
-                    src_type, _, dst_type = edge_type
-                    (
-                        neg_src_idx,
-                        neg_dst_idx,
-                    ) = negative_sampling(
-                        batch.edge_index_dict[edge_type],
-                        num_nodes=(
-                            batch[src_type].num_nodes,
-                            batch[dst_type].num_nodes,
-                        ),
-                        num_neg_samples_fold=self.num_neg_samples_fold,
-                    )
-                    neg_edge_index_dict[edge_type] = torch.stack(
-                        [neg_src_idx, neg_dst_idx]
-                    )
-
-            neg_dist_dict: Dict[EdgeType, Tensor] = self.decoder(
-                batch,
-                z_dict,
-                neg_edge_index_dict,
-                **self.aux_params(batch, neg_edge_index_dict),
-            )
-
         loss_dict = {}
         metric_dict = {}
         for edge_type, pos_dist in pos_dist_dict.items():
@@ -448,15 +457,7 @@ class LightningProxModel(L.LightningModule):
             src_type, _, dst_type = edge_type
             pos_edge_weights = pos_edge_weight_dict[edge_type]
             pos_loss = -pos_dist.log_prob(pos_edge_weights).sum()
-
-            if neg_sample:
-                neg_log_probs = -neg_dist_dict[edge_type].log_prob(
-                    torch.tensor(0.0, device=batch[src_type].x.device)
-                )
-                neg_loss = neg_log_probs.sum()
-                loss_dict[edge_type] = pos_loss + neg_loss
-            else:
-                loss_dict[edge_type] = pos_loss
+            loss_dict[edge_type] = pos_loss
 
         return loss_dict, neg_edge_index_dict, metric_dict
 
@@ -542,7 +543,6 @@ class LightningProxModel(L.LightningModule):
             else:
                 nodetype_weight = 1.0
             l += kl_div * nodetype_weight
-        l += self.aux_params.kl_div_loss(batch, node_weights_dict)
         return l
 
     def nll_loss(
@@ -566,23 +566,26 @@ class LightningProxModel(L.LightningModule):
         )
         l = torch.tensor(0.0, device=self.device)
         for edge_type, nll in nll_dict.items():
-            self.log(
-                f"{'train' if self.training else 'val'}_nll_loss/{edge_type}",
-                nll,
-                batch_size=batch[edge_type].edge_index.shape[1],
-                on_step=True,
-                on_epoch=True,
-            )
             if edgetype_loss_weight_dict:
                 edgetype_weight = edgetype_loss_weight_dict[edge_type]
             else:
                 edgetype_weight = torch.tensor(1.0, device=self.device)
+            self.log(
+                f"{'train' if self.training else 'val'}_nll_loss/{edge_type}",
+                nll * edgetype_weight,
+                batch_size=batch[edge_type].edge_index.shape[1],
+                on_step=True,
+                on_epoch=True,
+            )
             l += nll * edgetype_weight
         return l, neg_edge_index_dict, metric_dict
 
     def training_step(self, batch, batch_idx):
+        self.train()
+        # Ensure model is in training mode
         t0 = time.time()
         mu_dict, logstd_dict = self.encode(batch)
+        # Check if gradients are flowing
         z_dict = self.reparametrize(mu_dict, logstd_dict)
         t0 = time.time()
         batch_nll_loss, neg_edge_index_dict, _ = self.nll_loss(
@@ -591,10 +594,12 @@ class LightningProxModel(L.LightningModule):
             pos_edge_index_dict=batch.edge_index_dict,
             pos_edge_weight_dict=batch.edge_attr_dict,
             edgetype_loss_weight_dict=self.edgetype_loss_weight_dict,
+            neg_sample=True,
         )
         t1 = time.time()
         self.log("time:nll_loss", t1 - t0, on_step=True, on_epoch=False)
         if self.current_epoch >= self.n_no_kl:
+            self.aux_params.noise = True
             t0 = time.time()
             batch_kl_div_loss = self.kl_div_loss(
                 batch,
@@ -645,7 +650,20 @@ class LightningProxModel(L.LightningModule):
             on_step=True,
             on_epoch=True,
         )
-        loss = batch_nll_loss  # + batch_kl_div_loss / self.nll_scale + #herit_loss_value  #
+        aux_reg_loss = self.aux_params.regularization_loss(batch)
+        self.log(
+            "aux_reg_loss",
+            aux_reg_loss,
+            batch_size=sum([v.shape[1] for v in batch.edge_index_dict.values()]),
+            on_step=True,
+            on_epoch=True,
+        )
+        loss = (
+            batch_nll_loss
+            + batch_kl_div_loss / self.nll_scale
+            + herit_loss_value
+            + aux_reg_loss
+        )
         self.log(
             "loss",
             loss,
@@ -653,7 +671,128 @@ class LightningProxModel(L.LightningModule):
             on_step=True,
             on_epoch=True,
         )
+
+        # Debug: Monitor gradients and embeddings every 100 steps
+        if self.current_epoch % 10 == 0 and self.local_step == 0 and self.verbose:
+            self._debug_embeddings_only(mu_dict, logstd_dict)
+
+        self.local_step += 1
         return loss
+
+    def on_after_backward(self):
+        """Called after loss.backward() and before optimizers are stepped."""
+
+        # Gradient clipping to prevent aux_params from dominating
+        # torch.nn.utils.clip_grad_norm_(self.aux_params.parameters(), max_norm=1.0)
+
+        # Only check gradients every 100 steps to avoid spam
+        if self.current_epoch % 10 == 0 and self.local_step == 0 and self.verbose:
+            self._debug_gradients()
+
+    def _debug_embeddings_only(self, mu_dict, logstd_dict):
+        """Debug method to monitor embedding quality only (no gradients)."""
+
+        self.logger2.info(
+            f"\n=== EMBEDDING DEBUG - Epoch {self.current_epoch}, Step {self.global_step} ==="
+        )
+
+        # 1. Check KL Divergence and Variance
+        for node_type in mu_dict.keys():
+            mu_std = torch.std(mu_dict[node_type]).item()
+            logstd_mean = torch.mean(logstd_dict[node_type]).item()
+
+            self.logger2.info(
+                f"{node_type} - mu std: {mu_std:.4f}, logstd mean: {logstd_mean:.4f}"
+            )
+
+            # Check for collapse
+            if mu_std < 0.01:
+                self.logger2.info(f"WARNING: Potential mu collapse in {node_type}")
+            if logstd_mean < -5:
+                self.logger2.info(
+                    f"WARNING: Potential variance collapse in {node_type}"
+                )
+
+        # 2. Check latent representation quality
+        with torch.no_grad():
+            z_dict = self.reparametrize(mu_dict, logstd_dict)
+
+            for node_type, z in z_dict.items():
+                # Check variance across dimensions
+                dim_vars = torch.var(z, dim=0)
+                active_dims = (dim_vars > 0.01).sum().item()
+                total_dims = z.shape[1]
+
+                self.logger2.info(
+                    f"{node_type} - Active dims: {active_dims}/{total_dims}"
+                )
+                self.logger2.info(
+                    f"  Min/Max variance: {dim_vars.min().item():.4f}/{dim_vars.max().item():.4f}"
+                )
+
+                if active_dims < total_dims * 0.1:
+                    self.logger2.info(
+                        f"WARNING: Very few active dimensions in {node_type}"
+                    )
+
+        self.logger2.info("=" * 50)
+
+    def _debug_gradients(self):
+        """Debug method to monitor gradients after backward pass."""
+
+        self.logger2.info(
+            f"\n=== GRADIENT DEBUG - Epoch {self.current_epoch}, Step {self.global_step} ==="
+        )
+
+        # Check gradient norms after backward pass
+        encoder_grad_norm = 0
+        decoder_grad_norm = 0
+        aux_grad_norm = 0
+
+        for name, param in self.named_parameters():
+            if param.grad is not None:
+                grad_norm = param.grad.norm().item() ** 2
+                if "encoder" in name:
+                    encoder_grad_norm += grad_norm
+                elif "decoder" in name:
+                    decoder_grad_norm += grad_norm
+                elif "aux_params" in name:
+                    aux_grad_norm += grad_norm
+            else:
+                self.logger2.info(f"No gradient for: {name}")
+
+        encoder_grad_norm = encoder_grad_norm**0.5
+        decoder_grad_norm = decoder_grad_norm**0.5
+        aux_grad_norm = aux_grad_norm**0.5
+
+        self.logger2.info(f"Encoder grad norm: {encoder_grad_norm:.6f}")
+        self.logger2.info(f"Decoder grad norm: {decoder_grad_norm:.6f}")
+        self.logger2.info(f"Aux params grad norm: {aux_grad_norm:.6f}")
+
+        # Check gradient ratios
+        total_grad_norm = encoder_grad_norm + decoder_grad_norm + aux_grad_norm
+        if total_grad_norm > 0:
+            self.logger2.info(
+                f"Encoder grad %: {100*encoder_grad_norm/total_grad_norm:.1f}%"
+            )
+            self.logger2.info(
+                f"Decoder grad %: {100*decoder_grad_norm/total_grad_norm:.1f}%"
+            )
+            self.logger2.info(
+                f"Aux params grad %: {100*aux_grad_norm/total_grad_norm:.1f}%"
+            )
+
+            if encoder_grad_norm > 0 and decoder_grad_norm > 0:
+                ratio = encoder_grad_norm / decoder_grad_norm
+                self.logger2.info(f"Encoder/Decoder grad ratio: {ratio:.4f}")
+                if ratio < 0.01:
+                    self.logger2.info(
+                        "WARNING: Encoder gradients much smaller than decoder"
+                    )
+        else:
+            self.logger2.info("WARNING: No gradients found!")
+
+        self.logger2.info("=" * 60)
 
     def validation_step(self, batch, batch_idx):
         self.eval()
@@ -665,7 +804,7 @@ class LightningProxModel(L.LightningModule):
             batch.edge_index_dict,
             batch.edge_attr_dict,
             edgetype_loss_weight_dict=self.edgetype_loss_weight_dict,
-            neg_sample=False,
+            neg_sample=True,
         )
 
         if self.current_epoch >= self.n_no_kl:
@@ -703,9 +842,9 @@ class LightningProxModel(L.LightningModule):
             )
         else:
             herit_loss_value = torch.tensor(0.0)
-        loss = batch_nll_loss
-        # + batch_kl_div_loss / self.val_nll_scale + herit_loss_value
-        # )
+        loss = (
+            batch_nll_loss + batch_kl_div_loss / self.val_nll_scale + herit_loss_value
+        )
         self.log(
             "val_nll_loss_monitored",
             batch_nll_loss
@@ -767,9 +906,25 @@ class LightningProxModel(L.LightningModule):
             self.cell_weights = self.mean_cell_neighbor_distance(
                 self.reweight_rarecell_neighbors
             )
+        self.local_step = 0
 
     def configure_optimizers(self):
-        optimizer = torch.optim.Adam(self.parameters(), lr=self.learning_rate)
+        # Different learning rates for encoder vs aux_params
+        all_params = list(self.parameters())
+        encoder_params = list(self.encoder.parameters())
+        aux_params = list(self.aux_params.parameters())
+
+        optimizer = torch.optim.Adam(
+            [
+                {"params": encoder_params, "lr": self.learning_rate},
+                {
+                    "params": aux_params,
+                    "lr": self.learning_rate * 0.1,
+                },  # 10x smaller LR for aux params
+            ]
+            # [{"params": all_params, "lr": self.learning_rate}]
+        )
+
         scheduler = ReduceLROnPlateau(
             optimizer,
             patience=3,

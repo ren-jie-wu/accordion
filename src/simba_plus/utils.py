@@ -18,7 +18,7 @@ from pathlib import Path
 from logging.handlers import RotatingFileHandler
 
 
-def negative_sampling(edge_index, num_nodes, num_neg_samples_fold=2):
+def negative_sampling(edge_index, num_nodes, num_neg_samples_fold=1):
     # Sample edges by corrupting either the subject or the object of each edge.
     mask_1 = (
         torch.rand(edge_index.size(1) * num_neg_samples_fold, device=edge_index.device)
@@ -55,14 +55,12 @@ class MyDataModule(L.LightningDataModule):
         self.train_loader = train_loader
         self.val_loader = val_loader
 
-    # def setup(self, stage: str):
-    #     if stage == "fit":
-    #         self.train_loader.dataset.setup()
-
     def train_dataloader(self):
+        self.train_loader.dataset.sample_negative()
         return self.train_loader
 
     def val_dataloader(self):
+        self.val_loader.dataset.sample_negative()
         return self.val_loader
 
 
@@ -129,31 +127,29 @@ def structured_negative_sampling(
     return edge_index[0], edge_index[1], rand.to(edge_index.device)
 
 
-def get_edge_split_data(data, data_path, edge_types, logger):
+def get_edge_split_data(data, data_path, edge_types, negative_sampling_fold, logger):
     data_idx_path = f"{data_path.split(".dat")[0]}_data_idx.pkl"
-    if os.path.exists(data_idx_path):
+    if False:  # os.path.exists(data_idx_path):
         # Load existing train/val/test split
-        train_idxs = []
-        val_idxs = []
+        train_idxs = {}
+        val_idxs = {}
         with open(data_idx_path, "rb") as f:
             saved_splits = pkl.load(f)
+            train_edge_index_dict = saved_splits["train"]
             val_edge_index_dict = saved_splits["val"]
             test_edge_index_dict = saved_splits["test"]
             # Reconstruct train indices as complement of val+test
             train_edge_index_dict = {}
             for edge_type in edge_types:
                 edge_key = "__".join(edge_type)
-                all_edges = set(range(data[edge_type].num_edges))
-                val_test_edges = set(
-                    val_edge_index_dict[edge_key].tolist()
-                    + test_edge_index_dict[edge_key].tolist()
-                )
-                train_edges = list(all_edges - val_test_edges)
-                train_edge_index_dict[edge_key] = torch.tensor(train_edges)
-                train_idxs.append(train_edge_index_dict[edge_key])
-                val_idxs.append(val_edge_index_dict[edge_key])
-        train_data = CustomMultiIndexDataset(edge_types, train_idxs)
-        val_data = CustomMultiIndexDataset(edge_types, val_idxs)
+                train_idxs[edge_type] = train_edge_index_dict[edge_key]
+                val_idxs[edge_type] = val_edge_index_dict[edge_key]
+        train_data = CustomMultiIndexDataset(train_idxs, data, negative_sampling_fold)
+        val_data = CustomMultiIndexDataset(
+            val_idxs,
+            data,
+            negative_sampling_fold,
+        )
     else:
         train_index_dict, val_index_dict, test_index_dict = {}, {}, {}
         for edge_type in edge_types:
@@ -165,53 +161,94 @@ def get_edge_split_data(data, data_path, edge_types, logger):
             # Find indices that cover all source and target nodes
             selected_indices = set()
 
-            indices = torch.arange(num_edges)[torch.randperm(num_edges)]
-            logger.info("Selecting source node")
-            selected_indices.update(
-                np.unique(src_nodes[indices].cpu().numpy(), return_index=True)[
-                    1
-                ].tolist()
+            remaining_indices = torch.arange(num_edges)[torch.randperm(num_edges)]
+            logger.info("Selecting 3 indices for each unique source node")
+            # Get 3 indices for each unique source node
+            src_nodes_np = src_nodes[remaining_indices].cpu().numpy()
+            n_min_edges = 10
+            for unique_src in np.unique(src_nodes_np):
+                src_mask = src_nodes_np == unique_src
+                src_indices = np.where(src_mask)[0]
+                src_indices = src_indices[
+                    : min(len(src_indices), n_min_edges)
+                ]  # Take first 3 occurrences
+                selected_indices.update(remaining_indices[src_indices].tolist())
+
+            logger.info("Selecting 3 indices for each unique destination node")
+            # Get 3 indices for each unique destination node
+            dst_nodes_np = dst_nodes[remaining_indices].cpu().numpy()
+            for unique_dst in np.unique(dst_nodes_np):
+                dst_mask = dst_nodes_np == unique_dst
+                dst_indices = np.where(dst_mask)[0]  # Take first 3 occurrences
+                dst_indices = dst_indices[: min(len(dst_indices), n_min_edges)]
+                selected_indices.update(remaining_indices[dst_indices].tolist())
+
+            logger.info(
+                f"Selected {len(selected_indices)} indices with 3 samples per unique src and dst node"
             )
-            logger.info("Selecting destination node")
-            selected_indices.update(
-                np.unique(dst_nodes[indices].cpu().numpy(), return_index=True)[
-                    1
-                ].tolist()
-            )
-            logger.info("Selected indices")
 
             # Fill up to 90% for train, 5% for val
             remaining_indices = [
-                i for i in indices.cpu().numpy() if i not in selected_indices
+                i for i in remaining_indices.cpu().numpy() if i not in selected_indices
             ]
+
             logger.info("Got remaining indices")
-            train_size = int(num_edges * 0.9)
-            val_size = int(num_edges * 0.05)
+            train_size = int(num_edges * 0.96)
+            val_size = int(num_edges * 0.02)
             selected_indices = list(selected_indices)
             train_index_dict["__".join(edge_type)] = torch.tensor(
                 selected_indices
-                + remaining_indices[: train_size - len(selected_indices)]
+                + remaining_indices[: train_size - len(selected_indices)],
+                dtype=torch.long,
             )
             val_index_dict["__".join(edge_type)] = torch.tensor(
                 remaining_indices[
                     (train_size - len(selected_indices)) : (
                         train_size - len(selected_indices) + val_size
                     )
-                ]
+                ],
+                dtype=torch.long,
             )
             test_index_dict["__".join(edge_type)] = torch.tensor(
-                remaining_indices[(train_size - len(selected_indices) + val_size) :]
+                remaining_indices[(train_size - len(selected_indices) + val_size) :],
+                dtype=torch.long,
             )
         logger.info(f"Saving data indices to {data_idx_path}...")
+        idx_dict = {
+            "train": train_index_dict,
+            "val": val_index_dict,
+            "test": test_index_dict,
+        }
         with open(data_idx_path, "wb") as f:
-            pkl.dump({"val": val_index_dict, "test": test_index_dict}, f)
+            pkl.dump(
+                {
+                    "train": train_index_dict,
+                    "val": val_index_dict,
+                    "test": test_index_dict,
+                },
+                f,
+            )
+            print(
+                [
+                    {k: len(v) for k, v in idx_dict[s].items()}
+                    for s in ["train", "val", "test"]
+                ]
+            )
         train_data = CustomMultiIndexDataset(
-            edge_types,
-            [train_index_dict["__".join(edge_type)] for edge_type in edge_types],
+            pos_idx_dict={
+                edge_type: torch.sort(train_index_dict["__".join(edge_type)])[0]
+                for edge_type in edge_types
+            },
+            data=data,
+            negative_sampling_fold=negative_sampling_fold,
         )
         val_data = CustomMultiIndexDataset(
-            edge_types,
-            [val_index_dict["__".join(edge_type)] for edge_type in edge_types],
+            pos_idx_dict={
+                edge_type: torch.sort(val_index_dict["__".join(edge_type)])[0]
+                for edge_type in edge_types
+            },
+            data=data,
+            negative_sampling_fold=negative_sampling_fold,
         )
     return train_data, val_data
 
@@ -222,11 +259,15 @@ def get_edge_split_datamodule(
     edge_types,
     batch_size,
     num_workers,
-    checkpoint_dir,
+    negative_sampling_fold,
     logger,
 ):
     train_data, val_data = get_edge_split_data(
-        data=data, edge_types=edge_types, data_path=data_path, logger=logger
+        data=data,
+        edge_types=edge_types,
+        data_path=data_path,
+        negative_sampling_fold=negative_sampling_fold,
+        logger=logger,
     )
     train_loader, val_loader = get_dataloader(
         train_data=train_data,
@@ -240,13 +281,13 @@ def get_edge_split_datamodule(
 
 
 def get_dataloader(train_data, val_data, data, batch_size, num_workers: int = 30):
-    collate_ = partial(collate, data=data)
+    # collate_ = partial(collate, data=data)
 
     train_loader = DataLoader(
-        train_data, batch_size=batch_size, collate_fn=collate_, num_workers=num_workers
+        train_data, batch_size=batch_size, collate_fn=collate, num_workers=num_workers
     )
     val_loader = DataLoader(
-        val_data, batch_size=batch_size, collate_fn=collate_, num_workers=num_workers
+        val_data, batch_size=batch_size, collate_fn=collate, num_workers=num_workers
     )
     return train_loader, val_loader
 
@@ -259,7 +300,7 @@ def get_node_weights(
     device: torch.device,
 ):
     node_weights_path = os.path.join(checkpoint_dir, "node_weights_dict.pt")
-    if os.path.exists(node_weights_path):
+    if False:  # os.path.exists(node_weights_path):
         try:
             loaded = torch.load(node_weights_path, map_location="cpu")
             # Convert loaded values to device tensors if needed
@@ -281,18 +322,19 @@ def get_node_weights(
             node_type: torch.ones(x.shape[0], device=device)
             for (node_type, x) in data.x_dict.items()
         }
-        for batch in tqdm(pldata.train_loader):
+        for batch in tqdm(pldata.train_dataloader()):
             for node_type in batch.node_types:
                 node_counts_dict[node_type][batch[node_type].n_id] += 1
         node_weights_dict = {k: 1.0 / v for k, v in node_counts_dict.items()}
+        logger.info(f"Saving node weights to {node_weights_path}...")
         torch.save(node_weights_dict, node_weights_path)
     return node_weights_dict
 
 
 def get_nll_scales(
     data,
+    pldata,
     edge_types,
-    num_neg_samples_fold,
     batch_size,
     n_batches,
     n_val_batches,
@@ -301,11 +343,19 @@ def get_nll_scales(
     n_dense_edges = 0
     for src_nodetype, _, dst_nodetype in edge_types:
         n_dense_edges += data[src_nodetype].num_nodes * data[dst_nodetype].num_nodes
-
-    nll_scale = n_dense_edges / ((num_neg_samples_fold + 1) * batch_size * n_batches)
-    val_nll_scale = n_dense_edges / (
-        (num_neg_samples_fold + 1) * batch_size * n_val_batches
+    train_data = pldata.train_dataloader().dataset
+    val_data = pldata.val_dataloader().dataset
+    n_edges = sum(
+        len(train_data.edge_index_dict[edge_type])
+        for edge_type in train_data.edge_index_dict.keys()
+    )  # total positive edges
+    n_val_edges = sum(
+        len(val_data.edge_index_dict[edge_type])
+        for edge_type in val_data.edge_index_dict.keys()
     )
+
+    nll_scale = n_dense_edges / n_edges
+    val_nll_scale = n_dense_edges / n_val_edges
     logger.info(
         f"Scaling KL divergence loss with NLL scaling factor:{nll_scale}, {val_nll_scale}"
     )

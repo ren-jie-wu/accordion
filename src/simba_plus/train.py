@@ -39,7 +39,7 @@ import torch.multiprocessing
 
 
 torch.multiprocessing.set_sharing_strategy("file_system")
-torch_geometric.seed_everything(2025)
+torch_geometric.seed_everything(2026)
 # https://pytorch-lightning.readthedocs.io/en/stable/model/train_model_basic.html
 
 
@@ -100,7 +100,7 @@ def run(
     checkpoint_suffix: str = "",
     num_workers: int = 30,
     n_no_kl: int = 10,
-    n_kl_warmup: int = 1,
+    n_kl_warmup: int = 20,
     hidden_dims: int = 50,
     hsic_lam: float = 0.0,
     edgetype_specific: bool = True,
@@ -113,6 +113,7 @@ def run(
     sumstats_lam: float = 1.0,
     early_stopping_steps: int = 10,
     max_epochs: int = 1000,
+    verbose: bool = False,
 ):
     """Train the model with the given parameters.
     If get_adata is True, it will only load the gene/peak/cell AnnData object from the checkpoint.
@@ -142,11 +143,10 @@ def run(
     # torch.set_default_device(device)
     data = simba_plus.load_data.load_from_path(data_path)
     data.generate_ids()
-    print(data["cell"].n_id)
-    print(data["gene"].n_id)
+
     logger.info(f"Data loaded to {data['cell'].x.device}: {data}")
     dim_u = hidden_dims
-    num_neg_samples_fold = 1
+    negative_sampling_fold = 1
 
     if get_adata:
         logger.info(
@@ -174,7 +174,7 @@ def run(
         edge_types=edge_types,
         batch_size=batch_size,
         num_workers=num_workers,
-        checkpoint_dir=checkpoint_dir,
+        negative_sampling_fold=negative_sampling_fold,
         logger=logger,
     )
 
@@ -189,13 +189,13 @@ def run(
     logger.info(f"@N_BATCHES:{n_batches}")
     n_val_batches = len(pldata.val_loader) // batch_size + 1
     nll_scale, val_nll_scale = get_nll_scales(
-        data,
-        edge_types,
-        num_neg_samples_fold,
-        batch_size,
-        n_batches,
-        n_val_batches,
-        logger,
+        data=data,
+        pldata=pldata,
+        edge_types=edge_types,
+        batch_size=batch_size,
+        n_batches=n_batches,
+        n_val_batches=n_val_batches,
+        logger=logger,
     )
 
     if hsic_lam != 0:
@@ -224,7 +224,6 @@ def run(
         encoder_class=TransEncoder,
         n_latent_dims=dim_u,
         device=device,
-        num_neg_samples_fold=num_neg_samples_fold,
         edgetype_specific=edgetype_specific,
         hsic=hsic,
         herit_loss=herit_loss,
@@ -234,6 +233,8 @@ def run(
         val_nll_scale=val_nll_scale,
         node_weights_dict=node_weights_dict,
         nonneg=nonneg,
+        logger=logger,
+        verbose=verbose,
     ).to(device)
 
     def train(
@@ -254,7 +255,7 @@ def run(
                 "n_kl_warmup": n_kl_warmup,
                 "early_stopping_steps": early_stopping_steps,
                 "HSIC_loss": hsic_lam,
-                "num_neg_samples_fold": num_neg_samples_fold,
+                "negative_sampling_fold": negative_sampling_fold,
                 "edgetype_specific": edgetype_specific,
             }
         )
@@ -266,7 +267,7 @@ def run(
         )
         checkpoint_callback = ModelCheckpoint(
             checkpoint_dir,
-            monitor=None,
+            monitor="val_nll_loss",
             mode="min",
             save_last=True,
         )
@@ -331,6 +332,7 @@ def run(
             data_path=data_path,
             index_path=data_idx_path,
             batch_size=batch_size,
+            negative_sampling_fold=negative_sampling_fold,
             device=device,
             logger=logger,
         )
@@ -564,6 +566,11 @@ def add_argument(parser):
         type=int,
         default=1000,
         help="Number of max epochs for training",
+    )
+    parser.add_argument(
+        "--verbose",
+        action="store_true",
+        help="If set, enables verbose logging",
     )
     return parser
 
