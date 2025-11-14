@@ -129,7 +129,7 @@ def structured_negative_sampling(
 
 def get_edge_split_data(data, data_path, edge_types, negative_sampling_fold, logger):
     data_idx_path = f"{data_path.split(".dat")[0]}_data_idx.pkl"
-    if False:  # os.path.exists(data_idx_path):
+    if os.path.exists(data_idx_path):
         # Load existing train/val/test split
         train_idxs = {}
         val_idxs = {}
@@ -162,43 +162,44 @@ def get_edge_split_data(data, data_path, edge_types, negative_sampling_fold, log
             selected_indices = set()
 
             remaining_indices = torch.arange(num_edges)[torch.randperm(num_edges)]
-            logger.info("Selecting 3 indices for each unique source node")
-            # Get 3 indices for each unique source node
-            src_nodes_np = src_nodes[remaining_indices].cpu().numpy()
-            n_min_edges = 10
-            for unique_src in np.unique(src_nodes_np):
-                src_mask = src_nodes_np == unique_src
-                src_indices = np.where(src_mask)[0]
-                src_indices = src_indices[
-                    : min(len(src_indices), n_min_edges)
-                ]  # Take first 3 occurrences
-                selected_indices.update(remaining_indices[src_indices].tolist())
+            # logger.info("Selecting 3 indices for each unique source node")
+            # # Get 3 indices for each unique source node
+            # src_nodes_np = src_nodes[remaining_indices].cpu().numpy()
+            # n_min_edges = 10
+            # for unique_src in np.unique(src_nodes_np):
+            #     src_mask = src_nodes_np == unique_src
+            #     src_indices = np.where(src_mask)[0]
+            #     src_indices = src_indices[
+            #         : min(len(src_indices), n_min_edges)
+            #     ]  # Take first 3 occurrences
+            #     selected_indices.update(remaining_indices[src_indices].tolist())
 
-            logger.info("Selecting 3 indices for each unique destination node")
-            # Get 3 indices for each unique destination node
-            dst_nodes_np = dst_nodes[remaining_indices].cpu().numpy()
-            for unique_dst in np.unique(dst_nodes_np):
-                dst_mask = dst_nodes_np == unique_dst
-                dst_indices = np.where(dst_mask)[0]  # Take first 3 occurrences
-                dst_indices = dst_indices[: min(len(dst_indices), n_min_edges)]
-                selected_indices.update(remaining_indices[dst_indices].tolist())
+            # logger.info("Selecting 3 indices for each unique destination node")
+            # # Get 3 indices for each unique destination node
+            # dst_nodes_np = dst_nodes[remaining_indices].cpu().numpy()
+            # for unique_dst in np.unique(dst_nodes_np):
+            #     dst_mask = dst_nodes_np == unique_dst
+            #     dst_indices = np.where(dst_mask)[0]  # Take first 3 occurrences
+            #     dst_indices = dst_indices[: min(len(dst_indices), n_min_edges)]
+            #     selected_indices.update(remaining_indices[dst_indices].tolist())
 
-            logger.info(
-                f"Selected {len(selected_indices)} indices with 3 samples per unique src and dst node"
-            )
+            # logger.info(
+            #     f"Selected {len(selected_indices)} indices with 3 samples per unique src and dst node"
+            # )
 
-            # Fill up to 90% for train, 5% for val
-            remaining_indices = [
-                i for i in remaining_indices.cpu().numpy() if i not in selected_indices
-            ]
+            # # Fill up to 90% for train, 5% for val
+            # remaining_indices = [
+            #     i for i in remaining_indices.cpu().numpy() if i not in selected_indices
+            # ]
 
-            logger.info("Got remaining indices")
+            # logger.info("Got remaining indices")
             train_size = int(num_edges * 0.96)
             val_size = int(num_edges * 0.02)
             selected_indices = list(selected_indices)
             train_index_dict["__".join(edge_type)] = torch.tensor(
-                selected_indices
-                + remaining_indices[: train_size - len(selected_indices)],
+                # selected_indices
+                # +
+                remaining_indices[: train_size - len(selected_indices)],
                 dtype=torch.long,
             )
             val_index_dict["__".join(edge_type)] = torch.tensor(
