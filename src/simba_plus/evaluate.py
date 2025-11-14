@@ -135,23 +135,25 @@ def get_gexp_metrics(
         model.aux_params.bias_dict[make_key(src, gexp_edge_type)].detach().cpu().numpy()
     )
     pred_gene_scale = (
-        model.aux_params.logscale_dict[make_key(dst, gexp_edge_type)]
-        .detach()
-        .cpu()
-        .exp()
-        .numpy()
+        model.aux_params.logscale_dict[make_key(dst, gexp_edge_type)].detach().cpu()
     )
     pred_cell_scale = (
-        model.aux_params.logscale_dict[make_key(src, gexp_edge_type)]
-        .detach()
-        .cpu()
-        .exp()
-        .numpy()
+        model.aux_params.logscale_dict[make_key(src, gexp_edge_type)].detach().cpu()
     )
+    if pred_gene_mean.ndim == 2:
+        pred_gene_mean = pred_gene_mean.mean(axis=0)
+    if pred_cell_mean.ndim == 2:
+        pred_cell_mean = pred_cell_mean.mean(axis=0)
+    if pred_gene_scale.ndim == 2:
+        pred_gene_scale = pred_gene_scale.mean(axis=0)
+    if pred_cell_scale.ndim == 2:
+        pred_cell_scale = pred_cell_scale.mean(axis=0)
+    pred_gene_scale = pred_gene_scale.exp().numpy()
+    pred_cell_scale = pred_cell_scale.exp().numpy()
 
     res_out = test_dense_mat.toarray()
     res_out_norm = (
-        (res_out - pred_gene_mean - cell_mean[:, None])
+        (res_out - pred_gene_mean - pred_cell_mean[:, None])
         / (pred_gene_scale + 1e-6)
         / (pred_cell_scale[:, None] + 1e-6)
     )
