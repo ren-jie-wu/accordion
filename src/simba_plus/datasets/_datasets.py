@@ -568,7 +568,7 @@ def heritability(logger=None):
             if not os.path.exists(fullpath_plink):
                 _log(f"Downloading plink file to {fullpath_plink}...")
                 download_url(url_plink, fullpath_plink, desc="plink.tgz")
-            extract_tarfile(fullpath_plink)
+            extract_tarfile(fullpath_plink, bedfile_dir)
             _log(f"Downloaded to {fullpath_plink}.")
 
         for i in range(1, 23):
