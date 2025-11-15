@@ -605,7 +605,10 @@ def sumstats(logger=None):
     os.makedirs(filepath_prefix, exist_ok=True)
     fullpath_sumstats = os.path.join(filepath_prefix, filename)
 
-    if not os.path.exists(fullpath_sumstats) and not os.path.exists(sumstats_dir):
+    if not os.path.exists(fullpath_sumstats) and not (
+        os.path.exists(sumstats_dir)
+        and sum(1 for f in os.listdir(sumstats_dir) if f.endswith(".sumstats")) < 75
+    ):
         _log(f"Downloading sumstats to {fullpath_sumstats}...")
         os.makedirs(filepath_prefix, exist_ok=True)
         download_url(sumstats_url, fullpath_sumstats, desc=filename)
