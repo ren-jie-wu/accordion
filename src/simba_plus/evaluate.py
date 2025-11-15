@@ -15,7 +15,7 @@ from torch_geometric.utils import negative_sampling, to_dense_adj
 from torch_geometric.typing import EdgeType
 from torch_geometric.transforms.to_device import ToDevice
 from tqdm import tqdm
-from simba_plus.loader import CustomMultiIndexDataset, collate_graph
+from simba_plus.loader import CustomNSMultiIndexDataset, collate_graph, collate
 from simba_plus.model_prox import LightningProxModel, make_key
 from simba_plus.evaluation_utils import (
     compute_reconstruction_gene_metrics,
@@ -97,17 +97,18 @@ def get_gexp_metrics(
         / (gexp_std + 1e-6)
         / (cell_std[:, None] + 1e-6)
     )
-    gexp_dataset = CustomMultiIndexDataset(
+    gexp_dataset = CustomNSMultiIndexDataset(
         {
             gexp_edge_type: torch.sort(index_dict[gexp_edge_type])[0],
         },
         data,
         negative_sampling_fold=negative_sampling_fold,
     )
+    gexp_dataset.sample_negative()
     gexp_loader = DataLoader(
         gexp_dataset,
         batch_size=batch_size,
-        collate_fn=collate_graph,
+        collate_fn=collate,  # _graph,
         num_workers=num_workers,
     )
 
@@ -118,23 +119,24 @@ def get_gexp_metrics(
         src_idxs = []
         dst_idxs = []
 
-        for gene_batch, gene_batch_alledges in tqdm(gexp_loader):
+        for gene_batch in tqdm(gexp_loader):
             gene_batch = ToDevice(device)(gene_batch)
-            pos_dist_dict, neg_edge_index, neg_dist_dict = decode(
-                model, gene_batch, gene_batch_alledges
+            pos_dist_dict = decode(
+                model,
+                gene_batch,  # gene_batch_alledges
             )
             means.append(pos_dist_dict[gexp_edge_type].mean)
-            means.append(neg_dist_dict[gexp_edge_type].mean)
+            # means.append(neg_dist_dict[gexp_edge_type].mean)
             stds.append(pos_dist_dict[gexp_edge_type].stddev)
-            stds.append(neg_dist_dict[gexp_edge_type].stddev)
+            # stds.append(neg_dist_dict[gexp_edge_type].stddev)
             src_idxs.append(
                 gene_batch[src].n_id[gene_batch[gexp_edge_type].edge_index[0]].cpu()
             )
-            src_idxs.append(gene_batch[src].n_id[neg_edge_index[0]].cpu())
+            # src_idxs.append(gene_batch[src].n_id[neg_edge_index[0]].cpu())
             dst_idxs.append(
                 gene_batch[dst].n_id[gene_batch[gexp_edge_type].edge_index[1]].cpu()
             )
-            dst_idxs.append(gene_batch[dst].n_id[neg_edge_index[0]].cpu())
+            # dst_idxs.append(gene_batch[dst].n_id[neg_edge_index[0]].cpu())
         gexp_pred_mu = torch.cat(means)
         src_idx = torch.cat(src_idxs).cpu().numpy()
         dst_idx = torch.cat(dst_idxs).cpu().numpy()
@@ -232,35 +234,35 @@ def get_accessibility_metrics(
     if batch_size is None:
         batch_size = int(1e6)
     acc_edge_type = ("cell", "has_accessible", "peak")
-    acc_dataset = CustomMultiIndexDataset(
+    acc_dataset = CustomNSMultiIndexDataset(
         {acc_edge_type: index_dict[acc_edge_type]},
         data,
         negative_sampling_fold=negative_sampling_fold,
     )
+    acc_dataset.sample_negative()
     acc_loader = DataLoader(
         acc_dataset,
         batch_size=batch_size,
-        collate_fn=collate_graph,
+        collate_fn=collate,  # _graph,
         num_workers=num_workers,
     )
+
     with torch.no_grad():
         model.eval()
         true_acc = []
         preds = []
         edge_idxs = []
-        for acc_batch, acc_batch_alledges in tqdm(acc_loader):
+        for acc_batch in tqdm(acc_loader):
             acc_batch = ToDevice(device)(acc_batch)
             edge_idxs.append(acc_batch[acc_edge_type].edge_index.cpu())
-            pos_dist_dict, neg_edge_index, neg_dist_dict = decode(
-                model, acc_batch, acc_batch_alledges
-            )
-            edge_idxs.append(neg_edge_index.cpu())
+            pos_dist_dict = decode(model, acc_batch)
+            # edge_idxs.append(neg_edge_index.cpu())
             true_acc.append(
                 acc_batch[acc_edge_type].edge_attr.cpu(),
             )
-            true_acc.append(torch.zeros(neg_dist_dict[acc_edge_type].logits.shape[0]))
+            # true_acc.append(torch.zeros(neg_dist_dict[acc_edge_type].logits.shape[0]))
             preds.append(pos_dist_dict[acc_edge_type].logits)
-            preds.append(neg_dist_dict[acc_edge_type].logits)
+            # preds.append(neg_dist_dict[acc_edge_type].logits)
         acc_true = torch.cat(true_acc).long()
         acc_pred = torch.cat(preds).to(acc_true.device)
         acc_edge_idx = torch.cat(edge_idxs, axis=1)

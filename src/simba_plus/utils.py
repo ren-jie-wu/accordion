@@ -12,7 +12,12 @@ import lightning as L
 from lightning.pytorch.callbacks.early_stopping import EarlyStopping
 import os
 import pickle as pkl
-from simba_plus.loader import CustomMultiIndexDataset, collate_graph
+from simba_plus.loader import (
+    CustomNSMultiIndexDataset,
+    CustomMultiIndexDataset,
+    collate_graph,
+    collate,
+)
 import logging
 import sys
 from pathlib import Path
@@ -57,9 +62,11 @@ class MyDataModule(L.LightningDataModule):
         self.val_loader = val_loader
 
     def train_dataloader(self):
+        self.train_loader.dataset.sample_negative()
         return self.train_loader
 
     def val_dataloader(self):
+        self.val_loader.dataset.sample_negative()
         return self.val_loader
 
 
@@ -142,8 +149,8 @@ def get_edge_split_data(data, data_path, edge_types, negative_sampling_fold, log
                 edge_key = "__".join(edge_type)
                 train_idxs[edge_type] = train_edge_index_dict[edge_key]
                 val_idxs[edge_type] = val_edge_index_dict[edge_key]
-        train_data = CustomMultiIndexDataset(train_idxs, data, negative_sampling_fold)
-        val_data = CustomMultiIndexDataset(
+        train_data = CustomNSMultiIndexDataset(train_idxs, data, negative_sampling_fold)
+        val_data = CustomNSMultiIndexDataset(
             val_idxs,
             data,
             negative_sampling_fold,
@@ -202,7 +209,7 @@ def get_edge_split_data(data, data_path, edge_types, negative_sampling_fold, log
                     for s in ["train", "val", "test"]
                 ]
             )
-        train_data = CustomMultiIndexDataset(
+        train_data = CustomNSMultiIndexDataset(
             pos_idx_dict={
                 edge_type: torch.sort(train_index_dict["__".join(edge_type)])[0]
                 for edge_type in edge_types
@@ -210,7 +217,7 @@ def get_edge_split_data(data, data_path, edge_types, negative_sampling_fold, log
             data=data,
             negative_sampling_fold=negative_sampling_fold,
         )
-        val_data = CustomMultiIndexDataset(
+        val_data = CustomNSMultiIndexDataset(
             pos_idx_dict={
                 edge_type: torch.sort(val_index_dict["__".join(edge_type)])[0]
                 for edge_type in edge_types
@@ -255,13 +262,15 @@ def get_dataloader(train_data, val_data, data, batch_size, num_workers: int = 30
     train_loader = DataLoader(
         train_data,
         batch_size=batch_size,
-        collate_fn=collate_graph,
+        # collate_fn=partial(collate_graph, data=data),
+        collate_fn=collate,
         num_workers=num_workers,
     )
     val_loader = DataLoader(
         val_data,
         batch_size=batch_size,
-        collate_fn=collate_graph,
+        # collate_fn=partial(collate_graph, data=data),
+        collate_fn=collate,
         num_workers=num_workers,
     )
     return train_loader, val_loader

@@ -7,6 +7,7 @@ from torch_geometric.transforms.remove_isolated_nodes import RemoveIsolatedNodes
 from torch_geometric.transforms.to_device import ToDevice
 from copy import copy
 import pickle as pkl
+import time
 
 
 class CustomIndexDataset(Dataset):
@@ -25,7 +26,7 @@ class CustomIndexDataset(Dataset):
         return self.edge_attr_type, self.index[idx]
 
 
-class CustomMultiIndexDataset(Dataset):
+class CustomNSMultiIndexDataset(Dataset):
     def __init__(
         self,
         pos_idx_dict: dict[EdgeType, torch.Tensor],
@@ -46,6 +47,10 @@ class CustomMultiIndexDataset(Dataset):
 
     def sample_negative(self):
         """Add true negative edges' index"""
+        t1 = time.time()
+        torch_geometric.seed_everything(self.setup_count)
+        self.setup_count += 1
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         torch_geometric.seed.seed_everything(self.setup_count)
         self.setup_count += 1
         self.full_data = copy(self.data)
@@ -55,14 +60,15 @@ class CustomMultiIndexDataset(Dataset):
             for edge_type in self.edge_types:
                 src, _, dst = edge_type
                 neg_edge_index = torch_geometric.utils.negative_sampling(
-                    self.data[edge_type].edge_index,
+                    self.data[edge_type].edge_index.to(device),
                     num_nodes=(
                         self.data[src].num_nodes,
                         self.data[dst].num_nodes,
                     ),
                     num_neg_samples=len(self.pos_idx_dict[edge_type])
                     * self.negative_sampling_fold,
-                )
+                    method="dense",
+                ).to("cpu")
                 self.full_data[edge_type].edge_index = torch.cat(
                     [self.data[edge_type].edge_index, neg_edge_index], dim=1
                 )
@@ -95,6 +101,7 @@ class CustomMultiIndexDataset(Dataset):
                 )
         else:
             self.edge_index_dict = self.pos_idx_dict
+        print(f"Negative sampling time: {time.time() - t1:.4f}s")
         print("Permuting edges...")
         self.lengths = [
             len(self.edge_index_dict[edge_type]) for edge_type in self.edge_types
@@ -104,34 +111,20 @@ class CustomMultiIndexDataset(Dataset):
         self.type_assignments = torch.cat(
             [torch.full((length,), i) for i, length in enumerate(self.lengths)]
         )[perm_idx]
-        self.edgetype_permuted_idx = {
-            k: v[torch.randperm(len(v))] for k, v in self.edge_index_dict.items()  #
-        }
-        self.all_permuted_idx = []
-        edgetype_counters = [0] * len(self.edge_types)
-        for i in range(self.total_length):
-            type_idx = self.type_assignments[i].item()
-            edge_type = self.edge_types[type_idx]
-            edge_idx = edgetype_counters[type_idx]
-            self.all_permuted_idx.append(
-                self.edgetype_permuted_idx[edge_type][edge_idx].item()
-            )
-            edgetype_counters[type_idx] += 1
-        self.all_permuted_idx = torch.tensor(self.all_permuted_idx, dtype=torch.long)
-        del self.edgetype_permuted_idx
-        del self.edge_index_dict
+        self.all_edge_idx = torch.zeros(self.total_length, dtype=torch.long)
+        for i, edge_type in enumerate(self.edge_types):
+            self.all_edge_idx[self.type_assignments == i] = self.edge_index_dict[
+                edge_type
+            ]
+        print("Negative sampling and permutation done.")
 
     def __len__(self):
         return self.total_length
 
     def __getitem__(self, idx):
         edge_type = self.edge_types[self.type_assignments[idx]]
-        sample_idx = self.all_permuted_idx[idx]
-        res = (
-            edge_type,
-            sample_idx.item(),
-            self.full_data,
-        )
+        sample_idx = self.all_edge_idx[idx]
+        res = (edge_type, sample_idx.item(), self.full_data)
         return res
 
 
@@ -201,18 +194,19 @@ class CustomMultiIndexDataset(Dataset):
         res = (
             edge_type,
             sample_idx.item(),
-            self.data,
         )
         return res
 
 
-def collate_graph(batches):
+def collate_graph(batches, data):
     """To be used with CustomMultiIndexDataset without negative sampling"""
     graph_batch = defaultdict(list)
-    full_data = batches[0][2]
-    for edge_type, edge_index, _ in batches:
+    t0 = time.time()
+    for edge_type, edge_index in batches:
         graph_batch[edge_type].append(edge_index)
-    dat = full_data.edge_subgraph(
+    t1 = time.time()
+    print(f"Collate time: {t1 - t0:.4f}s")
+    dat = data.edge_subgraph(
         {
             k: torch.tensor(
                 v,
@@ -221,20 +215,12 @@ def collate_graph(batches):
             for k, v in graph_batch.items()
         }
     )
+    t2 = time.time()
+    print(f"edge subgraph time: {t2-t1:.4f}")
 
-    dat_return = RemoveIsolatedNodes()(
-        full_data.edge_subgraph(
-            {
-                k: torch.tensor(
-                    v,
-                    dtype=torch.long,
-                )
-                for k, v in graph_batch.items()
-            }
-        )
-    )
-
-    dat_all_edges = full_data.subgraph(
-        {k: dat_return[k].n_id for k in dat_return.node_types}
-    )
+    dat_return = RemoveIsolatedNodes()(dat)
+    t3 = time.time()
+    print(f"remove time: {t3-t2:.4f}")
+    dat_all_edges = data.subgraph(dat_return.n_id_dict)
+    print(f"subgraph time: {time.time()- t3:.4f}s")
     return dat_return, dat_all_edges

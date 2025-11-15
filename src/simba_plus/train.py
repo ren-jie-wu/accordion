@@ -1,4 +1,5 @@
 import os
+import time
 import logging
 from typing import Optional
 import pandas as pd
@@ -6,6 +7,7 @@ from datetime import datetime
 import argparse
 import warnings
 import pickle as pkl
+from lightning.pytorch.profilers import SimpleProfiler
 
 warnings.simplefilter(action="ignore", category=FutureWarning)
 import anndata as ad
@@ -163,9 +165,6 @@ def run(
         )
         return
 
-    loss_df = None
-    counts_dicts = None
-
     edge_types = data.edge_types
     if "peak" in data.node_types and "gene" in data.node_types:
         edge_types = [("cell", "has_accessible", "peak"), ("cell", "expresses", "gene")]
@@ -187,9 +186,19 @@ def run(
         logger=logger,
         device=device,
     )
-    n_batches = len(pldata.train_dataloader().dataset) // batch_size + 1
+    n_batches = (
+        pldata.train_loader.dataset.total_length
+        * (1 + negative_sampling_fold)
+        // batch_size
+        + 1
+    )
     logger.info(f"@N_BATCHES:{n_batches}")
-    n_val_batches = len(pldata.val_dataloader().dataset) // batch_size + 1
+    n_val_batches = (
+        pldata.val_loader.dataset.total_length
+        * (1 + negative_sampling_fold)
+        // batch_size
+        + 1
+    )
     nll_scale, val_nll_scale = get_nll_scales(
         data=data,
         pldata=pldata,
@@ -280,6 +289,7 @@ def run(
                 checkpoint_callback,
                 lrmonitor_callback,
             ],
+            profiler=SimpleProfiler(),
             logger=wandb_logger,
             devices=1,
             default_root_dir=checkpoint_dir,
@@ -302,7 +312,7 @@ def run(
             rpvgae.learning_rate = 0.1
 
             logger.info(f"@TRAIN: LR={rpvgae.learning_rate}")
-        trainer.validate(rpvgae, datamodule=pldata)
+        # trainer.validate(rpvgae, datamodule=pldata)
         trainer.fit(
             model=rpvgae,
             datamodule=pldata,

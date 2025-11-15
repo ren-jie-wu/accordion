@@ -606,7 +606,7 @@ class LightningProxModel(L.LightningModule):
         self.train()
         # Ensure model is in training mode
         t0 = time.time()
-        batch, batch_alledges = batch
+        # batch, batch_alledges = batch
         mu_dict, logstd_dict = self.encode(batch)
         # Check if gradients are flowing
         z_dict = self.reparametrize(mu_dict, logstd_dict)
@@ -617,7 +617,7 @@ class LightningProxModel(L.LightningModule):
             pos_edge_index_dict=batch.edge_index_dict,
             pos_edge_weight_dict=batch.edge_attr_dict,
             edgetype_loss_weight_dict=self.edgetype_loss_weight_dict,
-            batch_alledges=batch_alledges,
+            # batch_alledges=batch_alledges,
             neg_sample=True,
         )
         t1 = time.time()
@@ -701,6 +701,10 @@ class LightningProxModel(L.LightningModule):
             self._debug_embeddings_only(mu_dict, logstd_dict)
 
         self.local_step += 1
+        # if self.trainer.profiler:
+        #     data_time = self.trainer.profiler.recorded_durations["get_train_batch"][-1]
+        #     data_time = torch.tensor(data_time)
+        #     self.log("data_loading_time", data_time)
         return loss
 
     def on_after_backward(self):
@@ -820,7 +824,7 @@ class LightningProxModel(L.LightningModule):
 
     def validation_step(self, batch, batch_idx):
         self.eval()
-        batch, batch_alledges = batch
+        # batch, batch_alledges = batch
         mu_dict, logstd_dict = self.encode(batch)
         z_dict = self.reparametrize(mu_dict, logstd_dict)
         batch_nll_loss, neg_edge_index_dict, metric_dict = self.nll_loss(
@@ -829,7 +833,7 @@ class LightningProxModel(L.LightningModule):
             batch.edge_index_dict,
             batch.edge_attr_dict,
             edgetype_loss_weight_dict=self.edgetype_loss_weight_dict,
-            batch_alledges=batch_alledges,
+            # batch_alledges=batch_alledges,
             neg_sample=True,
         )
 
@@ -933,6 +937,13 @@ class LightningProxModel(L.LightningModule):
                 self.reweight_rarecell_neighbors
             )
         self.local_step = 0
+
+    def on_train_batch_start(self, batch, batch_idx):
+        if hasattr(self, "t"):
+            self.log("data_loading_time", time.time() - self.t)
+
+    def on_train_batch_end(self, output, batch, batch_idx):
+        self.t = time.time()
 
     def configure_optimizers(self):
         # Different learning rates for encoder vs aux_params
