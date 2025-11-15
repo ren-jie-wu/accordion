@@ -13,6 +13,7 @@ import numpy as np
 from simba_plus.model_prox import LightningProxModel
 import torch
 import torch_geometric
+from torch_geometric.transforms.to_device import ToDevice
 import lightning as L
 from lightning.pytorch.tuner import Tuner
 
@@ -36,7 +37,6 @@ from simba_plus.heritability.get_residual import (
 )
 from simba_plus.evaluate import eval, pretty_print
 import torch.multiprocessing
-
 
 torch.multiprocessing.set_sharing_strategy("file_system")
 torch_geometric.seed_everything(2026)
@@ -98,7 +98,7 @@ def run(
     data_path: str = None,
     load_checkpoint: bool = False,
     checkpoint_suffix: str = "",
-    num_workers: int = 30,
+    num_workers: int = 2,
     n_no_kl: int = 10,
     n_kl_warmup: int = 20,
     hidden_dims: int = 50,
@@ -143,8 +143,10 @@ def run(
     # torch.set_default_device(device)
     data = simba_plus.load_data.load_from_path(data_path)
     data.generate_ids()
+    for node_type in data.node_types:
+        del data[node_type].x
 
-    logger.info(f"Data loaded to {data['cell'].x.device}: {data}")
+    logger.info(f"Data loaded to {data['cell'].n_id.device}: {data}")
     dim_u = hidden_dims
     negative_sampling_fold = 1
 
@@ -169,7 +171,7 @@ def run(
         edge_types = [("cell", "has_accessible", "peak"), ("cell", "expresses", "gene")]
 
     pldata = get_edge_split_datamodule(
-        data=data,
+        data=data,  # ToDevice(device)(data),
         data_path=data_path,
         edge_types=edge_types,
         batch_size=batch_size,
@@ -282,7 +284,7 @@ def run(
             devices=1,
             default_root_dir=checkpoint_dir,
             num_sanity_val_steps=0,
-            reload_dataloaders_every_n_epochs=1,
+            reload_dataloaders_every_n_epochs=5,
             check_val_every_n_epoch=1,
             log_every_n_steps=10,
             max_epochs=max_epochs,
@@ -558,7 +560,7 @@ def add_argument(parser):
     parser.add_argument(
         "--early-stopping-steps",
         type=int,
-        default=10,
+        default=3,
         help="Number of epoch for early stopping patience",
     )
     parser.add_argument(

@@ -4,6 +4,7 @@ import torch
 from functools import partial
 from tqdm import tqdm
 from torch.utils.data import DataLoader
+from torch_geometric.utils import degree
 from torch_geometric.data import HeteroData
 from torch_geometric.typing import EdgeType
 from torch_geometric.utils.num_nodes import maybe_num_nodes
@@ -11,7 +12,7 @@ import lightning as L
 from lightning.pytorch.callbacks.early_stopping import EarlyStopping
 import os
 import pickle as pkl
-from simba_plus.loader import CustomMultiIndexDataset, collate
+from simba_plus.loader import CustomMultiIndexDataset, collate_graph
 import logging
 import sys
 from pathlib import Path
@@ -56,11 +57,9 @@ class MyDataModule(L.LightningDataModule):
         self.val_loader = val_loader
 
     def train_dataloader(self):
-        self.train_loader.dataset.sample_negative()
         return self.train_loader
 
     def val_dataloader(self):
-        self.val_loader.dataset.sample_negative()
         return self.val_loader
 
 
@@ -161,37 +160,6 @@ def get_edge_split_data(data, data_path, edge_types, negative_sampling_fold, log
             selected_indices = set()
 
             remaining_indices = torch.arange(num_edges)[torch.randperm(num_edges)]
-            # logger.info("Selecting 3 indices for each unique source node")
-            # # Get 3 indices for each unique source node
-            # src_nodes_np = src_nodes[remaining_indices].cpu().numpy()
-            # n_min_edges = 10
-            # for unique_src in np.unique(src_nodes_np):
-            #     src_mask = src_nodes_np == unique_src
-            #     src_indices = np.where(src_mask)[0]
-            #     src_indices = src_indices[
-            #         : min(len(src_indices), n_min_edges)
-            #     ]  # Take first 3 occurrences
-            #     selected_indices.update(remaining_indices[src_indices].tolist())
-
-            # logger.info("Selecting 3 indices for each unique destination node")
-            # # Get 3 indices for each unique destination node
-            # dst_nodes_np = dst_nodes[remaining_indices].cpu().numpy()
-            # for unique_dst in np.unique(dst_nodes_np):
-            #     dst_mask = dst_nodes_np == unique_dst
-            #     dst_indices = np.where(dst_mask)[0]  # Take first 3 occurrences
-            #     dst_indices = dst_indices[: min(len(dst_indices), n_min_edges)]
-            #     selected_indices.update(remaining_indices[dst_indices].tolist())
-
-            # logger.info(
-            #     f"Selected {len(selected_indices)} indices with 3 samples per unique src and dst node"
-            # )
-
-            # # Fill up to 90% for train, 5% for val
-            # remaining_indices = [
-            #     i for i in remaining_indices.cpu().numpy() if i not in selected_indices
-            # ]
-
-            # logger.info("Got remaining indices")
             train_size = int(num_edges * 0.96)
             val_size = int(num_edges * 0.02)
             selected_indices = list(selected_indices)
@@ -250,6 +218,7 @@ def get_edge_split_data(data, data_path, edge_types, negative_sampling_fold, log
             data=data,
             negative_sampling_fold=negative_sampling_fold,
         )
+    logger.info("Finished preparing train/val data splits.")
     return train_data, val_data
 
 
@@ -284,10 +253,16 @@ def get_dataloader(train_data, val_data, data, batch_size, num_workers: int = 30
     # collate_ = partial(collate, data=data)
 
     train_loader = DataLoader(
-        train_data, batch_size=batch_size, collate_fn=collate, num_workers=num_workers
+        train_data,
+        batch_size=batch_size,
+        collate_fn=collate_graph,
+        num_workers=num_workers,
     )
     val_loader = DataLoader(
-        val_data, batch_size=batch_size, collate_fn=collate, num_workers=num_workers
+        val_data,
+        batch_size=batch_size,
+        collate_fn=collate_graph,
+        num_workers=num_workers,
     )
     return train_loader, val_loader
 
@@ -300,7 +275,7 @@ def get_node_weights(
     device: torch.device,
 ):
     node_weights_path = os.path.join(checkpoint_dir, "node_weights_dict.pt")
-    if False:  # os.path.exists(node_weights_path):
+    if os.path.exists(node_weights_path):
         try:
             loaded = torch.load(node_weights_path, map_location="cpu")
             # Convert loaded values to device tensors if needed
@@ -318,13 +293,16 @@ def get_node_weights(
                 f"Failed to load node_weights_dict from {node_weights_path}: {e}"
             )
     else:
+        logger.info("Computing node weights...")
         node_counts_dict = {
             node_type: torch.ones(x.shape[0], device=device)
-            for (node_type, x) in data.x_dict.items()
+            for (node_type, x) in data.n_id_dict.items()
         }
-        for batch in tqdm(pldata.train_dataloader()):
-            for node_type in batch.node_types:
-                node_counts_dict[node_type][batch[node_type].n_id] += 1
+        for edge_type in data.edge_types:
+            src, _, dst = edge_type
+            node_counts_dict[src] += degree(data[edge_type].edge_index[0].to(device))
+            node_counts_dict[dst] += degree(data[edge_type].edge_index[1].to(device))
+
         node_weights_dict = {k: 1.0 / v for k, v in node_counts_dict.items()}
         logger.info(f"Saving node weights to {node_weights_path}...")
         torch.save(node_weights_dict, node_weights_path)
@@ -343,16 +321,10 @@ def get_nll_scales(
     n_dense_edges = 0
     for src_nodetype, _, dst_nodetype in edge_types:
         n_dense_edges += data[src_nodetype].num_nodes * data[dst_nodetype].num_nodes
-    train_data = pldata.train_dataloader().dataset
-    val_data = pldata.val_dataloader().dataset
-    n_edges = sum(
-        len(train_data.edge_index_dict[edge_type])
-        for edge_type in train_data.edge_index_dict.keys()
-    )  # total positive edges
-    n_val_edges = sum(
-        len(val_data.edge_index_dict[edge_type])
-        for edge_type in val_data.edge_index_dict.keys()
-    )
+    train_data = pldata.train_loader.dataset
+    val_data = pldata.val_loader.dataset
+    n_edges = train_data.total_length
+    n_val_edges = val_data.total_length
 
     nll_scale = n_dense_edges / n_edges
     val_nll_scale = n_dense_edges / n_val_edges

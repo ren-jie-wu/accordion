@@ -9,6 +9,7 @@ import torch.nn as nn
 from torch_geometric.typing import EdgeType, NodeType
 from torch_geometric.transforms.remove_isolated_nodes import RemoveIsolatedNodes
 from torch_geometric.transforms.to_device import ToDevice
+from torch_geometric.utils import negative_sampling
 from simba_plus.encoders import TransEncoder
 from simba_plus.constants import MIN_LOGSTD, MAX_LOGSTD
 
@@ -70,11 +71,10 @@ class AuxParams(nn.Module):
             if self.use_batch:
                 n_batches = len(data["cell"].batch.unique())
                 self.logscale_dict[dst_key] = nn.Parameter(
-                    torch.ones(
+                    torch.zeros(
                         (n_batches, data[dst].num_nodes),
                         # device=self.device,
                     )
-                    * 0.1
                 )
                 self.bias_dict[dst_key] = nn.Parameter(
                     torch.zeros(
@@ -197,13 +197,15 @@ class AuxParams(nn.Module):
             l += (self.std_dict[src_key][src_node_id]).pow(2).sum()
 
             if self.use_batch:
-                batches = batch["cell"].batch[batch[edge_type].edge_index[0]].long()
-                dst_node_id = batch[dst_type].n_id[batch[edge_type].edge_index[1]]
-
-                unique_index = torch.unique(torch.stack([batches, dst_node_id]), dim=0)
-                batches = unique_index[0, :]  # because batch 0 is baseline
+                batches_ = batch[src_type].batch[batch[edge_type].edge_index[0]].long()
+                dst_node_id_ = batch[dst_type].n_id[batch[edge_type].edge_index[1]]
+                unique_index = torch.unique(
+                    torch.vstack([batches_, dst_node_id_]),
+                    dim=0,
+                    sorted=False,
+                )
+                batches = unique_index[0, :]
                 dst_node_id = unique_index[1, :]
-
                 l += (self.logscale_dict[dst_key][batches, dst_node_id]).pow(2).sum()
                 l += (self.bias_dict[dst_key][batches, dst_node_id]).pow(2).sum()
                 l += (self.std_dict[dst_key][batches, dst_node_id]).pow(2).sum()
@@ -356,9 +358,7 @@ class LightningProxModel(L.LightningModule):
         self.n_kl_warmup = n_kl_warmup
         self.nll_scale = nll_scale
         self.val_nll_scale = val_nll_scale
-        self.num_nodes_dict = {
-            node_type: x.shape[0] for (node_type, x) in data.x_dict.items()
-        }
+        self.num_nodes_dict = data.num_nodes_dict
         self.reweight_rarecell = reweight_rarecell
         if self.reweight_rarecell:
             self.cell_weights = torch.ones(data["cell"].num_nodes, device=device)
@@ -375,7 +375,6 @@ class LightningProxModel(L.LightningModule):
             / len(data[edgetype].edge_index[0])
             for edgetype in self.edge_types
         }
-        print(self.edgetype_loss_weight_dict)
 
         self.node_weights_dict = node_weights_dict
         self.herit_loss = herit_loss
@@ -423,6 +422,7 @@ class LightningProxModel(L.LightningModule):
         pos_edge_index_dict: Dict[EdgeType, Tensor],
         pos_edge_weight_dict: Dict[EdgeType, Tensor],
         neg_edge_index_dict: Optional[Dict[EdgeType, Tensor]] = None,
+        batch_alledges: HeteroData = None,
         neg_sample=False,
         plot=False,
         get_metric=False,
@@ -443,15 +443,41 @@ class LightningProxModel(L.LightningModule):
             pos_edge_index_dict,
             **self.aux_params(batch, pos_edge_index_dict),
         )
-
+        if neg_sample and batch_alledges is not None:
+            if neg_edge_index_dict is None:
+                neg_edge_index_dict = {}
+                for edge_type in pos_edge_index_dict.keys():
+                    src, _, dst = edge_type
+                    neg_edge_index = negative_sampling(
+                        batch_alledges[edge_type].edge_index,
+                        num_nodes=(
+                            batch_alledges[src].num_nodes,
+                            batch_alledges[dst].num_nodes,
+                        ),
+                        num_neg_samples=len(pos_edge_index_dict[edge_type])
+                        * self.num_neg_samples_fold,
+                    )
+                    neg_edge_index_dict[edge_type] = neg_edge_index
+            neg_dist_dict: Dict[EdgeType, Distribution] = self.decoder(
+                batch,
+                z_dict,
+                neg_edge_index_dict,
+                **self.aux_params(batch, neg_edge_index_dict),
+            )
         loss_dict = {}
         metric_dict = {}
         for edge_type, pos_dist in pos_dist_dict.items():
-
             src_type, _, dst_type = edge_type
             pos_edge_weights = pos_edge_weight_dict[edge_type]
             pos_loss = -pos_dist.log_prob(pos_edge_weights).sum()
             loss_dict[edge_type] = pos_loss
+            if neg_sample and batch_alledges is not None:
+                neg_dist = neg_dist_dict[edge_type]
+                neg_edge_weights = torch.zeros(
+                    neg_dist.event_shape, device=pos_edge_weights.device
+                )
+                neg_loss = -neg_dist.log_prob(neg_edge_weights).sum()
+                loss_dict[edge_type] += neg_loss
 
         return loss_dict, neg_edge_index_dict, metric_dict
 
@@ -548,6 +574,7 @@ class LightningProxModel(L.LightningModule):
         neg_edge_index_dict: Optional[Dict[EdgeType, Tensor]] = None,
         # num_neg_samples_fold: Optional[int] = 1,
         edgetype_loss_weight_dict: Optional[Dict[EdgeType, float]] = None,
+        batch_alledges: HeteroData = None,
         neg_sample=False,
     ):
         nll_dict, neg_edge_index_dict, metric_dict = self.relational_recon_loss(
@@ -556,6 +583,7 @@ class LightningProxModel(L.LightningModule):
             pos_edge_index_dict=pos_edge_index_dict,
             pos_edge_weight_dict=pos_edge_weight_dict,
             neg_edge_index_dict=neg_edge_index_dict,
+            batch_alledges=batch_alledges,
             neg_sample=neg_sample,
         )
         l = torch.tensor(0.0, device=self.device)
@@ -578,6 +606,7 @@ class LightningProxModel(L.LightningModule):
         self.train()
         # Ensure model is in training mode
         t0 = time.time()
+        batch, batch_alledges = batch
         mu_dict, logstd_dict = self.encode(batch)
         # Check if gradients are flowing
         z_dict = self.reparametrize(mu_dict, logstd_dict)
@@ -588,6 +617,7 @@ class LightningProxModel(L.LightningModule):
             pos_edge_index_dict=batch.edge_index_dict,
             pos_edge_weight_dict=batch.edge_attr_dict,
             edgetype_loss_weight_dict=self.edgetype_loss_weight_dict,
+            batch_alledges=batch_alledges,
             neg_sample=True,
         )
         t1 = time.time()
@@ -790,6 +820,7 @@ class LightningProxModel(L.LightningModule):
 
     def validation_step(self, batch, batch_idx):
         self.eval()
+        batch, batch_alledges = batch
         mu_dict, logstd_dict = self.encode(batch)
         z_dict = self.reparametrize(mu_dict, logstd_dict)
         batch_nll_loss, neg_edge_index_dict, metric_dict = self.nll_loss(
@@ -798,6 +829,7 @@ class LightningProxModel(L.LightningModule):
             batch.edge_index_dict,
             batch.edge_attr_dict,
             edgetype_loss_weight_dict=self.edgetype_loss_weight_dict,
+            batch_alledges=batch_alledges,
             neg_sample=True,
         )
 
