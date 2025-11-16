@@ -1,4 +1,4 @@
 [submodule "src/ldsc"]
 	path = src/ldsc
-    url = git@github.com:jykr/ldsc-sparse.git
+    url = https://github.com/jykr/ldsc-sparse.git
     branch = main
