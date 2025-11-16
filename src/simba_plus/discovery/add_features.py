@@ -6,6 +6,8 @@ import anndata as ad
 from typing import Optional, Sequence
 from scipy.special import softmax
 from tqdm import tqdm
+import warnings
+warnings.filterwarnings("ignore")
 
 
 def compute_path_scores(
@@ -88,57 +90,87 @@ def add_simba_plus_features(
     adata_P_path: str,
     gene_col: str,
     peak_col: str,
+    celltype_specific: bool = False,
+    skip_uncertain: bool = True,
+    use_distance_weight: bool = False,
 ) -> pd.DataFrame:
-    """Add SIMBA+ features to an evaluation set using precomputed embeddings.
-
-    This function computes SIMBA+ path scores and squared-score features for a given
-    evaluation dataset.
-
-    Args:
-        eval_df (pd.DataFrame):
-            Evaluation dataset with gene and peak identifiers.
-        adata_C_path (str):
-            Path to SIMBA+ cell embeddings (``.h5ad``).
-        adata_G_path (str):
-            Path to SIMBA+ gene embeddings (``.h5ad``).
-        adata_P_path (str):
-            Path to SIMBA+ peak embeddings (``.h5ad``).
-        gene_col (str):
-            Column name for gene identifiers.
-        peak_col (str):
-            Column name for peak identifiers.
-
-    Returns:
-        pd.DataFrame: The evaluation set with additional SIMBA+ feature columns.
     """
+    Add SIMBA+ global and cell-type–specific features using precomputed embeddings.
+    """
+
+    # ---- Load embeddings ----
     adata_C = ad.read_h5ad(adata_C_path)
     adata_G = ad.read_h5ad(adata_G_path)
     adata_P = ad.read_h5ad(adata_P_path)
 
-    # Normalize & mean center
+    # ---- Normalize & mean center ----
     adata_C.layers["X_normed"] = adata_C.X / np.linalg.norm(adata_C.X, axis=1)[:, None]
     G_norm = adata_G.X / np.linalg.norm(adata_G.X, axis=1)[:, None]
     P_norm = adata_P.X / np.linalg.norm(adata_P.X, axis=1)[:, None]
 
-    # Map to index positions in adata.obs
-    split_df = eval_df[["Gene", "Peak"]]
-    split_df["gidx"] = split_df["Gene"].map(lambda g: adata_G.obs.index.values.tolist().index(g))
-    split_df["pidx"] = split_df["Peak"].map(lambda p: adata_P.obs.index.get_loc(p))
+    # ---- Map gene/peak identifiers to embedding indices ----
+    split_df = eval_df[[gene_col, peak_col]].copy()
+    split_df["gidx"] = split_df[gene_col].map(lambda g: adata_G.obs.index.get_loc(g))
+    split_df["pidx"] = split_df[peak_col].map(lambda p: adata_P.obs.index.get_loc(p))
+
     gidx = split_df["gidx"].values
     pidx = split_df["pidx"].values
 
+    # ---- Compute softmax similarity matrices ----
     G_cand = G_norm[gidx, :]
     P_cand = P_norm[pidx, :]
 
     G_cand_softmax = softmax(G_cand @ adata_C.layers["X_normed"].T, axis=1)
     P_cand_softmax = softmax(P_cand @ adata_C.layers["X_normed"].T, axis=1)
 
-    G_df = pd.DataFrame(G_cand_softmax, index=split_df["Gene"], columns=adata_C.obs.index)
-    P_df = pd.DataFrame(P_cand_softmax, index=split_df["Peak"], columns=adata_C.obs.index)
+    G_df = pd.DataFrame(G_cand_softmax, index=split_df[gene_col], columns=adata_C.obs.index)
+    P_df = pd.DataFrame(P_cand_softmax, index=split_df[peak_col], columns=adata_C.obs.index)
 
+    # ---- Remove duplicate gene or peak rows ----
     G_df = G_df[~G_df.index.duplicated(keep="first")]
     P_df = P_df[~P_df.index.duplicated(keep="first")]
 
+    # ---- Determine cell-type column if requested ----
+    if celltype_specific:
+        possible_keys = ["cell_type", "celltype", "celltype_mapped", "leiden"]
+        celltype_col = None
+        for key in possible_keys:
+            if key in adata_C.obs.columns:
+                celltype_col = key
+                break
+
+        if celltype_col is None:
+            raise ValueError(
+                "celltype_specific=True, but no cell-type column found in adata_C.obs. "
+                "Expected one of: 'cell_type', 'celltype', 'celltype_mapped', 'leiden'."
+            )
+
+        # Build mapping: cell type → list of cell IDs
+        celltype_to_cells = (
+            adata_C.obs.groupby(celltype_col)
+            .apply(lambda x: x.index.tolist())
+            .to_dict()
+        )
+
+        # ---- Apply minimum-size filter (skip small groups) ----
+        filtered = {}
+        for ct, cells in celltype_to_cells.items():
+            if len(cells) < 10:
+                print(f"Skipping cell type '{ct}' (n={len(cells)} < 10).")
+                continue
+            filtered[ct] = cells
+
+        if len(filtered) == 0:
+            print("No cell types have ≥10 cells. Falling back to global score only.")
+            celltype_to_cells = None
+        else:
+            celltype_to_cells = filtered
+
+    else:
+        celltype_to_cells = None
+
+
+    # ---- Compute path scores ----
     eval_df = compute_path_scores(
         eval_df=eval_df,
         gene_col=gene_col,
@@ -146,6 +178,18 @@ def add_simba_plus_features(
         output_prefix="SIMBA+_path_score",
         df_softmax_CG=G_df,
         df_softmax_CP=P_df,
+        celltype_to_cells=celltype_to_cells,
+        skip_uncertain=skip_uncertain,
     )
-    eval_df.drop_duplicates('peak_gene_pair',inplace=True)
+
+    if use_distance_weight:
+        for col in eval_df.columns:
+            if col.startswith("SIMBA+_path_score"):
+                eval_df[col] = eval_df[col] * (1 / (eval_df["Distance_to_TSS"] + 1))
+
+    if 'peak_gene_pair' not in eval_df.columns:
+        eval_df['peak_gene_pair'] = eval_df[peak_col] + '_' + eval_df[gene_col]
+        
+    eval_df.drop_duplicates("peak_gene_pair", inplace=True)
     return eval_df
+
