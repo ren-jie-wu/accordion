@@ -93,9 +93,7 @@ def run_ldsc_h2(
     ldscdir = f"{script_dir}/../../ldsc/"
     weights_prefix = f"{filedir}/1000G_Phase3_weights_hm3_no_MHC/weights.hm3_noMHC."
     frq_prefix = f"{filedir}/1000G_Phase3_frq/1000G.EUR.QC."
-    refmodel_prefix = (
-        f"{filedir}/1000G_Phase3_baselineLD_v2.2_ldscores/baselineLD.,{annot_prefix}."
-    )
+    refmodel_prefix = f"{filedir}/baselineLD.,{annot_prefix}."
     sumstat_paths = pd.read_csv(sumstat_paths_file, sep="\t", header=None, index_col=0)[
         1
     ].to_dict()

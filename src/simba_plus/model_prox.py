@@ -197,18 +197,10 @@ class AuxParams(nn.Module):
             l += (self.std_dict[src_key][src_node_id]).pow(2).sum()
 
             if self.use_batch:
-                batches_ = batch[src_type].batch[batch[edge_type].edge_index[0]].long()
-                dst_node_id_ = batch[dst_type].n_id[batch[edge_type].edge_index[1]]
-                unique_index = torch.unique(
-                    torch.vstack([batches_, dst_node_id_]),
-                    dim=0,
-                    sorted=False,
-                )
-                batches = unique_index[0, :]
-                dst_node_id = unique_index[1, :]
-                l += (self.logscale_dict[dst_key][batches, dst_node_id]).pow(2).sum()
-                l += (self.bias_dict[dst_key][batches, dst_node_id]).pow(2).sum()
-                l += (self.std_dict[dst_key][batches, dst_node_id]).pow(2).sum()
+                dst_node_id = batch[dst_type].n_id
+                l += (self.logscale_dict[dst_key][:, dst_node_id]).pow(2).sum()
+                l += (self.bias_dict[dst_key][:, dst_node_id]).pow(2).sum()
+                l += (self.std_dict[dst_key][:, dst_node_id]).pow(2).sum()
             else:
                 dst_node_id = batch[dst_type].n_id
                 l += (self.logscale_dict[dst_key][dst_node_id]).pow(2).sum()
