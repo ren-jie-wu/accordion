@@ -20,7 +20,7 @@ def train_xgboost(
     beta: float = 0.1,
     random_state: int = 42,
     n_search_iter: int = 60,
-    search_n_jobs: int = -1,
+    search_n_jobs: int = 2,
     use_scaler: bool = False
 ):
     """
@@ -236,8 +236,9 @@ def train_xgboost_model_leave_one_chr_out(
     feature_df, feature_names = _select_numeric_features(data)
 
     # Scoring function
-    auerc_scorer = make_scorer(auerc_old, greater_is_better=True, needs_proba=True)
-
+    #auerc_scorer = make_scorer(auerc_old, greater_is_better=True, needs_proba=True) # sklearn 1.3.1 uses needs_proba=True
+    auerc_scorer = make_scorer(auerc_old, greater_is_better=True, response_method="predict_proba") # sklearn > 1.4.1 uses 
+    
     # Parameter grid
     param_grid = {
         "max_depth": [2, 3, 4, 5, 6],

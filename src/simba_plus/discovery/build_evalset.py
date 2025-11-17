@@ -513,7 +513,7 @@ def merge_and_label_eqtl_pairs(
 
 
 def build_crispr_evalset(
-    candidate_csv: str,
+    candidate: pd.DataFrame,
     crispr_file: str,
     adata_cg_genes: Optional[Sequence[str]] = None,
     output_csv: Optional[str] = None,
@@ -528,7 +528,7 @@ def build_crispr_evalset(
     present in your RNA modality, and assigns labels from the CRISPR benchmark.
 
     Args:
-        candidate_csv: Path to candidate peak–gene links CSV (BMMC or other).
+        candidate: candidate peak–gene links (BMMC or other).
         crispr_file: Path to CRISPR benchmark TSV (gzipped), with columns
             ``chrom``, ``chromStart``, ``chromEnd``, ``measuredGeneSymbol``, ``Regulated``.
         adata_cg_genes: Optional list of genes detected in RNA
@@ -544,7 +544,7 @@ def build_crispr_evalset(
         and optional ``1/Distance``.
     """
     print("Building CRISPR evaluation set...")
-    candidates = _load_and_validate_candidates(candidate_csv, peak_col, gene_col, distance_col)
+    candidates = _load_and_validate_candidates(candidate, peak_col, gene_col, distance_col)
     crispr_eval = _load_and_validate_crispr(crispr_file)
 
     overlap_df = _intersect_crispr_with_candidates(crispr_eval, candidates, distance_col)
@@ -567,12 +567,12 @@ def build_crispr_evalset(
     return overlap_df
 
 def _load_and_validate_candidates(
-    candidate_csv: str,
+    candidate: pd.DataFrame,
     peak_col: str,
     gene_col: str,
     distance_col: Optional[str]
 ) -> pd.DataFrame:
-    df = pd.read_csv(candidate_csv)
+    df = candidate.copy()
     missing = {peak_col, gene_col} - set(df.columns)
     if missing:
         raise ValueError(f"candidate_csv missing required columns: {missing}")
