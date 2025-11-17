@@ -252,8 +252,8 @@ def main(args):
     adata_CP = ad.read_h5ad(args.adata_CP)
 
     # Load optional tables
-    snps = pd.read_csv(args.snps) if args.snps else None
-    regions = pd.read_csv(args.regions) if args.regions else None
+    snps = pd.read_csv(args.snps, sep='\t') if args.snps else None
+    regions = pd.read_csv(args.regions, sep='\t') if args.regions else None
 
     # Run prediction
     out = predict(
