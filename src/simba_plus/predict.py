@@ -74,11 +74,8 @@ def predict(
     return links
 
 ## load data
-def load_crispr_eval(adata_CG, adata_CP, crispr_file, model_dir, output_path, 
-                     window_size=500_000, 
-                     celltype_specific: bool = False,
-                     skip_uncertain: bool = True,
-                     use_distance_weight: bool = False,):
+def load_crispr_eval(adata_CG, adata_CP, crispr_file, output_path, 
+                     window_size=500_000,):
     
     # construct candidate peak-gene links
     links = pgl.get_peak_gene_links(
@@ -93,29 +90,27 @@ def load_crispr_eval(adata_CG, adata_CP, crispr_file, model_dir, output_path,
         output_csv=output_path
     )
 
-    adata_C_path = os.path.join(model_dir, "adata_C.h5ad")
-    adata_G_path = os.path.join(model_dir, "adata_G.h5ad")
-    adata_P_path = os.path.join(model_dir, "adata_P.h5ad")
+    # adata_C_path = os.path.join(model_dir, "adata_C.h5ad")
+    # adata_G_path = os.path.join(model_dir, "adata_G.h5ad")
+    # adata_P_path = os.path.join(model_dir, "adata_P.h5ad")
 
-    crispr_eval_df = score.add_simba_plus_features(
-        eval_df=crispr_eval_df,
-        adata_C_path=adata_C_path,
-        adata_G_path=adata_G_path,
-        adata_P_path=adata_P_path,
-        gene_col="Gene",
-        peak_col="Peak",
-        celltype_specific=celltype_specific,
-        skip_uncertain=skip_uncertain,
-        use_distance_weight=use_distance_weight,
-    )
+    # crispr_eval_df = score.add_simba_plus_features(
+    #     eval_df=crispr_eval_df,
+    #     adata_C_path=adata_C_path,
+    #     adata_G_path=adata_G_path,
+    #     adata_P_path=adata_P_path,
+    #     gene_col="Gene",
+    #     peak_col="Peak",
+    #     celltype_specific=celltype_specific,
+    #     skip_uncertain=skip_uncertain,
+    #     use_distance_weight=use_distance_weight,
+    # )
 
     crispr_eval_df.to_csv(output_path)
     return crispr_eval_df
 
-def load_eqtl_eval(adata_CG, adata_CP, model_dir, output_path, tissue="Whole_Blood", pip_pos=0.5, pip_neg=0.01, 
-                   window_size=500_000,                     
-                   celltype_specific: bool = False, skip_uncertain: bool = True,
-                   use_distance_weight: bool = False,):
+def load_eqtl_eval(adata_CG, adata_CP, output_path, tissue="Whole_Blood", pip_pos=0.5, pip_neg=0.01, 
+                   window_size=500_000,):
     # construct candidate peak-gene links
     links = pgl.get_peak_gene_links(
         peaks=list(adata_CP.var_names),
@@ -167,21 +162,21 @@ def load_eqtl_eval(adata_CG, adata_CP, model_dir, output_path, tissue="Whole_Blo
     overlap_df = build_evalset.overlap_variants_with_peaks(links, variants_bed) # overlap 1000G variants with peaks
     eqtl_eval_df = build_evalset.merge_and_label_eqtl_pairs(links, overlap_df, pos_training, neg_training) # label positive / negative pairs based on GTEx PIP score
     
-    adata_C_path = os.path.join(model_dir, "adata_C.h5ad")
-    adata_G_path = os.path.join(model_dir, "adata_G.h5ad")
-    adata_P_path = os.path.join(model_dir, "adata_P.h5ad")
+    # adata_C_path = os.path.join(model_dir, "adata_C.h5ad")
+    # adata_G_path = os.path.join(model_dir, "adata_G.h5ad")
+    # adata_P_path = os.path.join(model_dir, "adata_P.h5ad")
 
-    eqtl_eval_df = score.add_simba_plus_features(
-        eval_df=eqtl_eval_df,
-        adata_C_path=adata_C_path,
-        adata_G_path=adata_G_path,
-        adata_P_path=adata_P_path,
-        gene_col="Gene_name",
-        peak_col="Peak",
-        celltype_specific=celltype_specific,
-        skip_uncertain=skip_uncertain,
-        use_distance_weight=use_distance_weight,
-    )
+    # eqtl_eval_df = score.add_simba_plus_features(
+    #     eval_df=eqtl_eval_df,
+    #     adata_C_path=adata_C_path,
+    #     adata_G_path=adata_G_path,
+    #     adata_P_path=adata_P_path,
+    #     gene_col="Gene_name",
+    #     peak_col="Peak",
+    #     celltype_specific=celltype_specific,
+    #     skip_uncertain=skip_uncertain,
+    #     use_distance_weight=use_distance_weight,
+    # )
     
     eqtl_eval_df.to_csv(output_path)
     
