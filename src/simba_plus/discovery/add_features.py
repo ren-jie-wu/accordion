@@ -185,6 +185,7 @@ def add_simba_plus_features(
     if use_distance_weight:
         for col in eval_df.columns:
             if col.startswith("SIMBA+_path_score"):
+                eval_df['1/Distance'] = 1 / (eval_df["Distance_to_TSS"] + 1)
                 eval_df[col] = eval_df[col] * (1 / (eval_df["Distance_to_TSS"] + 1))
 
     if 'peak_gene_pair' not in eval_df.columns:
