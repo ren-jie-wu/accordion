@@ -89,24 +89,11 @@ def load_crispr_eval(adata_CG, adata_CP, crispr_file, output_path,
         crispr_file=crispr_file,
         output_csv=output_path
     )
-
-    # adata_C_path = os.path.join(model_dir, "adata_C.h5ad")
-    # adata_G_path = os.path.join(model_dir, "adata_G.h5ad")
-    # adata_P_path = os.path.join(model_dir, "adata_P.h5ad")
-
-    # crispr_eval_df = score.add_simba_plus_features(
-    #     eval_df=crispr_eval_df,
-    #     adata_C_path=adata_C_path,
-    #     adata_G_path=adata_G_path,
-    #     adata_P_path=adata_P_path,
-    #     gene_col="Gene",
-    #     peak_col="Peak",
-    #     celltype_specific=celltype_specific,
-    #     skip_uncertain=skip_uncertain,
-    #     use_distance_weight=use_distance_weight,
-    # )
-
-    crispr_eval_df.to_csv(output_path)
+    # convert to required format for predict input
+    crispr_eval_df['regionid'] = crispr_eval_df['crispr_chrom'].astype(str) + '_' + crispr_eval_df['crispr_start'].astype(str) + '_' + crispr_eval['crispr_end'].astype(str) + '_' + crispr_eval['crispr_gene'].astype(str) + '_' + crispr_eval['label'].astype(str)
+    crispr_eval_df.rename(columns={'crispr_start':'start','crispr_end':'end', 'crispr_chrom':'chr'},inplace=True)
+    crispr_input = crispr_eval_df[['regionid', 'chr', 'start','end']].copy()
+    crispr_input.to_csv(output_path, sep='\t',index=False)
     return crispr_eval_df
 
 def load_eqtl_eval(adata_CG, adata_CP, output_path, tissue="Whole_Blood", pip_pos=0.5, pip_neg=0.01, 
