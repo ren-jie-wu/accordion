@@ -13,7 +13,7 @@ from simba_plus.discovery import candidate_links as pgl
 from simba_plus.discovery import add_features as score
 
 
-def predict(
+def peak_gene_link_unsupervised(
     adata_CG,
     adata_CP,
     model_dir,
@@ -265,7 +265,7 @@ def main(args):
     regions = pd.read_csv(args.regions, sep='\t') if args.regions else None
 
     # Run prediction
-    out = predict(
+    out = peak_gene_link_unsupervised(
         adata_CG=adata_CG,
         adata_CP=adata_CP,
         model_dir=args.model_dir,
