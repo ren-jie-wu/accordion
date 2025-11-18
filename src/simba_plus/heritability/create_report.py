@@ -153,8 +153,8 @@ def run_ldsc(
     output_dir = f"{output_dir}/h2/{annot_id}/"
     run_ldsc_h2(
         sumstat_paths_file,
-        annot_prefix,
         output_dir,
+        annot_prefix,
         rerun=rerun_h2,
         nprocs=nprocs,
         logger=logger,

@@ -12,7 +12,7 @@ def get_residual(sumstat_list_path, output_path, rerun=False, nprocs=10):
     sumstat_paths = list(
         pd.read_csv(sumstat_list_path, sep="\t", index_col=0, header=None).values[:, 0]
     )
-    run_ldsc_h2(sumstat_paths, output_path, rerun=rerun, nprocs=nprocs)
+    run_ldsc_h2(sumstat_list_path, output_path, rerun=rerun, nprocs=nprocs)
     ref_bed = pd.read_csv(
         os.path.dirname(__file__)
         + "/../../../data/ldsc_data/1000G_Phase3_plinkfiles/ref.txt",

@@ -666,7 +666,7 @@ class LightningProxModel(L.LightningModule):
             on_step=True,
             on_epoch=True,
         )
-        aux_reg_loss = self.aux_params.regularization_loss(batch)
+        aux_reg_loss = self.aux_params.regularization_loss(batch) * 1e-2
         self.log(
             "aux_reg_loss",
             aux_reg_loss,
@@ -693,10 +693,7 @@ class LightningProxModel(L.LightningModule):
             self._debug_embeddings_only(mu_dict, logstd_dict)
 
         self.local_step += 1
-        # if self.trainer.profiler:
-        #     data_time = self.trainer.profiler.recorded_durations["get_train_batch"][-1]
-        #     data_time = torch.tensor(data_time)
-        #     self.log("data_loading_time", data_time)
+
         return loss
 
     def on_after_backward(self):

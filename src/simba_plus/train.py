@@ -7,7 +7,6 @@ from datetime import datetime
 import argparse
 import warnings
 import pickle as pkl
-from lightning.pytorch.profilers import SimpleProfiler
 
 warnings.simplefilter(action="ignore", category=FutureWarning)
 import anndata as ad
@@ -101,8 +100,8 @@ def run(
     load_checkpoint: bool = False,
     checkpoint_suffix: str = "",
     num_workers: int = 2,
-    n_no_kl: int = 10,
-    n_kl_warmup: int = 20,
+    n_no_kl: int = 0,
+    n_kl_warmup: int = 10,
     hidden_dims: int = 50,
     hsic_lam: float = 0.0,
     edgetype_specific: bool = True,
@@ -289,7 +288,6 @@ def run(
                 checkpoint_callback,
                 lrmonitor_callback,
             ],
-            profiler=SimpleProfiler(),
             logger=wandb_logger,
             devices=1,
             default_root_dir=checkpoint_dir,
@@ -301,15 +299,15 @@ def run(
         )
         if not load_checkpoint:
             tuner = Tuner(trainer)
-            # tuner.lr_find(
-            #     rpvgae,
-            #     pldata,
-            #     min_lr=0.001,
-            #     max_lr=0.01,
-            #     num_training=30,
-            #     early_stop_threshold=None,
-            # )
-            rpvgae.learning_rate = 0.1
+            tuner.lr_find(
+                rpvgae,
+                pldata,
+                min_lr=0.001,
+                max_lr=0.1,
+                num_training=30,
+                early_stop_threshold=None,
+            )
+            # rpvgae.learning_rate = 0.1
 
             logger.info(f"@TRAIN: LR={rpvgae.learning_rate}")
         # trainer.validate(rpvgae, datamodule=pldata)
