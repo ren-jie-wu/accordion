@@ -161,7 +161,16 @@ class BernoulliDataDecoder(ProximityDecoder):
         cos = torch.nn.CosineSimilarity()
         scale = torch.exp(src_logscale + dst_logscale)
         logit = scale * cos(u, v) + src_bias + dst_bias
-        return D.Bernoulli(logits=logit)
+        try:
+            return D.Bernoulli(logits=logit)
+        except Exception as e:
+            print(logit[torch.isnan(logit)])
+            print(scale[torch.isnan(logit)])
+            print(src_logscale[torch.isnan(logit)])
+            print(dst_logscale[torch.isnan(logit)])
+            print(src_bias[torch.isnan(logit)])
+            print(dst_bias[torch.isnan(logit)])
+            raise e
 
 
 class NegativeBinomialDataDecoder(ProximityDecoder):

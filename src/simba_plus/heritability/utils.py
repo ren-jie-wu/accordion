@@ -89,7 +89,6 @@ def plot_hist(overlap_matrix, logger):
 def enrichment_analysis(
     adata_G,
     sumstat_paths_dict: dict,
-    top_n=1000,
     gene_set: Literal[
         "GO_Biological_Process_2021", "KEGG_2021_Human", "MSigDB_Hallmark_2020"
     ] = "GO_Biological_Process_2021",
@@ -107,6 +106,30 @@ def enrichment_analysis(
                 adata_G.obs[f"tau_z_{pheno}"],
                 gene_set,
                 index=adata_G.obs_names,
+            )
+    adata_G.uns["pheno_enrichments"] = geneset_enrichments
+    adata_G.uns["pheno_enrichments_n_genes"] = n_genes
+    return adata_G
+
+
+def enrichment_analysis(
+    adata_G,
+    sumstat_paths_dict: dict,
+):
+
+    geneset_enrichments = {}
+    n_genes = {}
+    for pheno in sumstat_paths_dict.keys():
+        if pheno not in geneset_enrichments:
+            geneset_enrichments[pheno] = {}
+        for gene_set in [
+            "GO_Biological_Process_2021",
+            "KEGG_2021_Human",
+            "MSigDB_Hallmark_2020",
+        ]:
+            geneset_enrichments[pheno][gene_set], n_genes[pheno] = run_enrichr(
+                adata_G.obs[f"tau_z_{pheno}"],
+                gene_set,
             )
     adata_G.uns["pheno_enrichments"] = geneset_enrichments
     adata_G.uns["pheno_enrichments_n_genes"] = n_genes

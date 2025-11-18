@@ -601,7 +601,6 @@ class LightningProxModel(L.LightningModule):
         t1 = time.time()
         self.log("time:nll_loss", t1 - t0, on_step=True, on_epoch=False)
         if self.current_epoch >= self.n_no_kl:
-            self.aux_params.noise = True
             t0 = time.time()
             batch_kl_div_loss = self.kl_div_loss(
                 batch,
