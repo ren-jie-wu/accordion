@@ -7,6 +7,7 @@ import pybedtools
 from scipy.sparse import lil_matrix
 import gseapy as gp
 from kneed import KneeLocator
+from simba_plus.post_training.enrichment import run_enrichr
 
 
 def get_overlap(snp_df, peak_df):
@@ -86,28 +87,27 @@ def plot_hist(overlap_matrix, logger):
 
 
 def enrichment_analysis(
-    gene_loadings: pd.DataFrame,
+    adata_G,
+    sumstat_paths_dict: dict,
     top_n=1000,
     gene_set: Literal[
         "GO_Biological_Process_2021", "KEGG_2021_Human", "MSigDB_Hallmark_2020"
     ] = "GO_Biological_Process_2021",
 ):
-    sig_results_top1k = {}
-    for pheno in gene_loadings.index:
-        gene_list = gene_loadings.loc[pheno].sort_values(ascending=False)
-        x = range(0, len(gene_list))
-        kn = KneeLocator(x, gene_list, curve="convex", direction="decreasing", S=1)
-        top_n = max(100, kn.knee)
-        pre_res = gp.enrichr(
-            gene_list[:top_n].index.tolist(),
-            gene_sets=gene_set,
-            organism="Human",
-            outdir=None,
-            background=gene_list.index.tolist(),
-        )
-        res2d = pre_res.res2d
-        # res2d = res2d.loc[~res2d["Odds Ratio"].map(np.isinf)]
-        sig_results_top1k[pheno] = res2d.sort_values(
-            "Adjusted P-value", ascending=True
-        ).reset_index()
-    return sig_results_top1k
+
+    geneset_enrichments = {}
+    n_genes = {}
+    for pheno in sumstat_paths_dict.keys():
+        for gene_set in [
+            "GO_Biological_Process_2021",
+            "KEGG_2021_Human",
+            "MSigDB_Hallmark_2020",
+        ]:
+            geneset_enrichments[pheno][gene_set], n_genes[pheno] = run_enrichr(
+                adata_G.obs[f"tau_z_{pheno}"],
+                gene_set,
+                index=adata_G.obs_names,
+            )
+    adata_G.uns["pheno_enrichments"] = geneset_enrichments
+    adata_G.uns["pheno_enrichments_n_genes"] = n_genes
+    return adata_G

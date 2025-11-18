@@ -10,7 +10,8 @@ from argparse import ArgumentParser
 import scipy
 import simba_plus.datasets._datasets
 from simba_plus.utils import setup_logging
-from simba_plus.heritability.utils import get_overlap, plot_hist, enrichment_analysis
+from simba_plus.heritability.utils import get_overlap
+from simba_plus.post_training.enrichment import run_enrichr
 from simba_plus.heritability.ldsc import run_ldsc_l2, run_ldsc_h2
 from simba_plus.heritability.get_taus import get_tau_z_dep
 
@@ -153,8 +154,8 @@ def run_ldsc(
     output_dir = f"{output_dir}/h2/{annot_id}/"
     run_ldsc_h2(
         sumstat_paths_file,
-        annot_prefix,
         output_dir,
+        annot_prefix,
         rerun=rerun_h2,
         nprocs=nprocs,
         logger=logger,
@@ -231,29 +232,6 @@ def main(args, logger=None):
         f"{args.output_dir}/h2/peak_loadings/",
     )
 
-    # Enrichment analysis
-    # enrichment_results = enrichment_analysis(
-    #     pd.DataFrame(adata_G.obs[["" for p in sumstat_paths_dict.keys()]]).T,
-    #     index=adata_G.obs_names,
-    # )
-    # with open(f"{args.output_dir}/enrichment_results.pkl", "wb") as f:
-    #     pkl.dump(enrichment_results, f)
-
-    # if args.create_report:
-    # pm.execute_notebook(
-    #     f"{os.path.dirname(__file__)}/scheritability_report.ipynb",
-    #     f"{args.output_dir}/simba+heritability_report.ipynb",
-    #     parameters=dict(
-    #         checkpoint_path=args.checkpoint_path,
-    #         version_suffix=args.version_suffix,
-    #         cell_type_label=args.cell_type_label,
-    #         sumstat_paths_file=args.sumstats,
-    #         adata_prefix=args.adata_prefix,
-    #         rerun=args.rerun,
-    #         rerun_h2=args.rerun_h2,
-    #         output_path=args.output_dir,
-    #     ),
-    # )
     sumstat_paths = pd.read_csv(args.sumstats, sep="\t", header=None, index_col=0)[
         1
     ].to_dict()

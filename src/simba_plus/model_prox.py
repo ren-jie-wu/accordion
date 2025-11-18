@@ -30,7 +30,6 @@ class AuxParams(nn.Module):
     def __init__(self, data: HeteroData, edgetype_specific: bool = True) -> None:
         super().__init__()
         # Batch correction for RNA-seq data
-        self.noise = False
         self.bias_dict = nn.ParameterDict()
         self.logscale_dict = nn.ParameterDict()
         self.std_dict = nn.ParameterDict()
@@ -161,25 +160,27 @@ class AuxParams(nn.Module):
         """
 
         def weighted_sum(x, w):
-            # if not w.any():
-            #     return 0
             if w is None:
                 return x.sum()
-            return (x * w).sum()  # / w.long().sum()
+            return (x * w).sum()
 
-        mu = self.__mu__ if mu is None else mu
-        logstd = self.__logstd__ if logstd is None else logstd
         kls = 1 + 2 * logstd - mu**2 - logstd.exp() ** 2
         return -0.5 * weighted_sum(kls, weight)
 
     def batched(self, param, param_logstd):
-        return param
-        return_param = param
-        if self.noise:
-            return_param = return_param + torch.randn_like(param_logstd) * torch.exp(
-                param_logstd
+        if self.training and self.use_batch:
+            return_param = torch.cat(
+                [
+                    param[[0], :],
+                    param[1:, :]
+                    + param[[0], :]
+                    + torch.randn_like(param_logstd[1:, :])
+                    * torch.exp(param_logstd[1:, :]),
+                ],
+                axis=0,
             )
-        return return_param
+            return return_param
+        return param
 
     def regularization_loss(self, batch):
         l = torch.tensor(0.0, device=next(self.parameters()).device)
@@ -197,18 +198,10 @@ class AuxParams(nn.Module):
             l += (self.std_dict[src_key][src_node_id]).pow(2).sum()
 
             if self.use_batch:
-                batches_ = batch[src_type].batch[batch[edge_type].edge_index[0]].long()
-                dst_node_id_ = batch[dst_type].n_id[batch[edge_type].edge_index[1]]
-                unique_index = torch.unique(
-                    torch.vstack([batches_, dst_node_id_]),
-                    dim=0,
-                    sorted=False,
-                )
-                batches = unique_index[0, :]
-                dst_node_id = unique_index[1, :]
-                l += (self.logscale_dict[dst_key][batches, dst_node_id]).pow(2).sum()
-                l += (self.bias_dict[dst_key][batches, dst_node_id]).pow(2).sum()
-                l += (self.std_dict[dst_key][batches, dst_node_id]).pow(2).sum()
+                dst_node_id = batch[dst_type].n_id
+                l += (self.logscale_dict[dst_key][:, dst_node_id]).pow(2).sum()
+                l += (self.bias_dict[dst_key][:, dst_node_id]).pow(2).sum()
+                l += (self.std_dict[dst_key][:, dst_node_id]).pow(2).sum()
             else:
                 dst_node_id = batch[dst_type].n_id
                 l += (self.logscale_dict[dst_key][dst_node_id]).pow(2).sum()
@@ -246,16 +239,9 @@ class AuxParams(nn.Module):
                     self.std_dict[dst_key], self.std_logstd_dict[dst_key]
                 )[batches, dst_node_id]
             else:
-                dst_logscale_dict[edge_type] = self.batched(
-                    self.logscale_dict[dst_key],
-                    self.logscale_logstd_dict[dst_key],
-                )[dst_node_id]
-                dst_bias_dict[edge_type] = self.batched(
-                    self.bias_dict[dst_key], self.bias_logstd_dict[dst_key]
-                )[dst_node_id]
-                dst_std_dict[edge_type] = self.batched(
-                    self.std_dict[dst_key], self.std_logstd_dict[dst_key]
-                )[dst_node_id]
+                dst_logscale_dict[edge_type] = self.logscale_dict[dst_key][dst_node_id]
+                dst_bias_dict[edge_type] = self.bias_dict[dst_key][dst_node_id]
+                dst_std_dict[edge_type] = self.std_dict[dst_key][dst_node_id]
         return {
             "src_logscale_dict": src_logscale_dict,
             "src_bias_dict": src_bias_dict,
@@ -287,24 +273,16 @@ class AuxParams(nn.Module):
                 dst_key,
             ) = self.get_keys(src_type, dst_type, edge_type)
             if self.use_batch:
-                batches = batch["cell"].batch[edge_index[0]].long()
-                dst_node_id = batch[dst_type].n_id[edge_index[1]]
-
-                unique_index = torch.unique(torch.stack([batches, dst_node_id]), dim=0)
-
-                batches = unique_index[0, :]  # because batch 0 is baseline
-                dst_node_id = unique_index[1, :]
+                dst_node_id = batch[dst_type].n_id
                 weight = node_weights_dict[dst_type][dst_node_id]
-                m_logscale = self.logscale_dict[dst_key][batches, dst_node_id]
-                logstd_logscale = self.logscale_logstd_dict[dst_key][
-                    batches, dst_node_id
-                ]
+                m_logscale = self.logscale_dict[dst_key][1:, dst_node_id]
+                logstd_logscale = self.logscale_logstd_dict[dst_key][1:, dst_node_id]
                 l += self._kl_loss(m_logscale, logstd_logscale, weight)
-                m_bias = self.bias_dict[dst_key][batches, dst_node_id]
-                logstd_bias = self.bias_logstd_dict[dst_key][batches, dst_node_id]
+                m_bias = self.bias_dict[dst_key][1:, dst_node_id]
+                logstd_bias = self.bias_logstd_dict[dst_key][1:, dst_node_id]
                 l += self._kl_loss(m_bias, logstd_bias, weight)
-                m_std = self.std_dict[dst_key][batches, dst_node_id]
-                logstd_std = self.std_logstd_dict[dst_key][batches, dst_node_id]
+                m_std = self.std_dict[dst_key][1:, dst_node_id]
+                logstd_std = self.std_logstd_dict[dst_key][1:, dst_node_id]
                 l += self._kl_loss(m_std, logstd_std, weight)
         return l
 
@@ -632,11 +610,13 @@ class LightningProxModel(L.LightningModule):
                 batch.n_id_dict,
                 node_weights_dict=self.node_weights_dict,
             )
+            aux_kl_div_loss = self.aux_params.kl_div_loss(batch, self.node_weights_dict)
             t1 = time.time()
+            kl_scale = min(self.current_epoch + 1, self.n_kl_warmup - self.n_no_kl) / (
+                self.n_kl_warmup - self.n_no_kl
+            )
+            batch_kl_div_loss *= kl_scale
 
-            batch_kl_div_loss *= min(
-                self.current_epoch + 1, self.n_kl_warmup - self.n_no_kl
-            ) / (self.n_kl_warmup - self.n_no_kl)
         else:
             batch_kl_div_loss = 0.0
         if self.herit_loss is not None:
@@ -674,19 +654,27 @@ class LightningProxModel(L.LightningModule):
             on_step=True,
             on_epoch=True,
         )
-        aux_reg_loss = self.aux_params.regularization_loss(batch)
         self.log(
-            "aux_reg_loss",
-            aux_reg_loss,
+            "aux_kl_div_loss",
+            aux_kl_div_loss / self.nll_scale,
             batch_size=sum([v.shape[1] for v in batch.edge_index_dict.values()]),
             on_step=True,
             on_epoch=True,
         )
+        # aux_reg_loss = self.aux_params.regularization_loss(batch) * 1e-2
+        # self.log(
+        #     "aux_reg_loss",
+        #     aux_reg_loss,
+        #     batch_size=sum([v.shape[1] for v in batch.edge_index_dict.values()]),
+        #     on_step=True,
+        #     on_epoch=True,
+        # )
         loss = (
             batch_nll_loss
             + batch_kl_div_loss / self.nll_scale
+            + aux_kl_div_loss / self.nll_scale
             + herit_loss_value
-            + aux_reg_loss
+            # + aux_reg_loss
         )
         self.log(
             "loss",
@@ -701,10 +689,7 @@ class LightningProxModel(L.LightningModule):
             self._debug_embeddings_only(mu_dict, logstd_dict)
 
         self.local_step += 1
-        # if self.trainer.profiler:
-        #     data_time = self.trainer.profiler.recorded_durations["get_train_batch"][-1]
-        #     data_time = torch.tensor(data_time)
-        #     self.log("data_loading_time", data_time)
+
         return loss
 
     def on_after_backward(self):

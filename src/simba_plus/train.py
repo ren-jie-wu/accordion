@@ -7,7 +7,6 @@ from datetime import datetime
 import argparse
 import warnings
 import pickle as pkl
-from lightning.pytorch.profilers import SimpleProfiler
 
 warnings.simplefilter(action="ignore", category=FutureWarning)
 import anndata as ad
@@ -37,7 +36,7 @@ from simba_plus.heritability.get_residual import (
     get_residual,
     get_peak_residual,
 )
-from simba_plus.evaluate import eval, pretty_print
+from simba_plus.evaluate import evaluate_model, pretty_print
 import torch.multiprocessing
 
 torch.multiprocessing.set_sharing_strategy("file_system")
@@ -101,8 +100,8 @@ def run(
     load_checkpoint: bool = False,
     checkpoint_suffix: str = "",
     num_workers: int = 2,
-    n_no_kl: int = 10,
-    n_kl_warmup: int = 20,
+    n_no_kl: int = 0,
+    n_kl_warmup: int = 10,
     hidden_dims: int = 50,
     hsic_lam: float = 0.0,
     edgetype_specific: bool = True,
@@ -116,6 +115,7 @@ def run(
     early_stopping_steps: int = 10,
     max_epochs: int = 1000,
     verbose: bool = False,
+    negative_sampling_fold: int = 1,
 ):
     """Train the model with the given parameters.
     If get_adata is True, it will only load the gene/peak/cell AnnData object from the checkpoint.
@@ -150,7 +150,6 @@ def run(
 
     logger.info(f"Data loaded to {data['cell'].n_id.device}: {data}")
     dim_u = hidden_dims
-    negative_sampling_fold = 1
 
     if get_adata:
         logger.info(
@@ -289,7 +288,6 @@ def run(
                 checkpoint_callback,
                 lrmonitor_callback,
             ],
-            profiler=SimpleProfiler(),
             logger=wandb_logger,
             devices=1,
             default_root_dir=checkpoint_dir,
@@ -301,15 +299,15 @@ def run(
         )
         if not load_checkpoint:
             tuner = Tuner(trainer)
-            # tuner.lr_find(
-            #     rpvgae,
-            #     pldata,
-            #     min_lr=0.001,
-            #     max_lr=0.01,
-            #     num_training=30,
-            #     early_stop_threshold=None,
-            # )
-            rpvgae.learning_rate = 0.1
+            tuner.lr_find(
+                rpvgae,
+                pldata,
+                min_lr=0.001,
+                max_lr=0.1,
+                num_training=30,
+                early_stop_threshold=None,
+            )
+            # rpvgae.learning_rate = 0.1
 
             logger.info(f"@TRAIN: LR={rpvgae.learning_rate}")
         # trainer.validate(rpvgae, datamodule=pldata)
@@ -336,21 +334,7 @@ def run(
         peak_adata=adata_CP,
         logger=logger,
     )
-
-    def run_eval():
-        data_idx_path = f"{data_path.split('.dat')[0]}_data_idx.pkl"
-        metric_dict = eval(
-            model_path=last_model_path,
-            data_path=data_path,
-            index_path=data_idx_path,
-            batch_size=batch_size,
-            negative_sampling_fold=negative_sampling_fold,
-            device=device,
-            logger=logger,
-        )
-        pretty_print(metric_dict, logger=logger)
-        with open(f"{os.path.dirname(last_model_path)}/pred_dict.pkl", "wb") as file:
-            pkl.dump(metric_dict, file)
+    return last_model_path, logger
 
     logger.info("Starting evaluation with test data...")
     run_eval()
@@ -477,6 +461,24 @@ def save_files(
     )
 
 
+def run_eval(args, last_model_path, logger):
+    logger.info("Starting evaluation with test data...")
+    data_idx_path = f"{args.data_path.split('.dat')[0]}_data_idx.pkl"
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    metric_dict = evaluate_model(
+        model_path=last_model_path,
+        data_path=args.data_path,
+        index_path=data_idx_path,
+        batch_size=args.batch_size,
+        negative_sampling_fold=args.negative_sampling_fold,
+        device=args.device,
+        logger=logger,
+    )
+    pretty_print(metric_dict, logger=logger)
+    with open(f"{os.path.dirname(last_model_path)}/pred_dict.pkl", "wb") as file:
+        pkl.dump(metric_dict, file)
+
+
 def main(args):
     check_args(args)
     kwargs = vars(args)
@@ -489,7 +491,9 @@ def main(args):
             nprocs=args.num_workers,
         )
         kwargs["ldsc_res"] = residuals
-    run(**kwargs)
+
+    last_model_path, logger = run(**kwargs)
+    run_eval(args, last_model_path, logger)
 
 
 def add_argument(parser):
@@ -532,6 +536,12 @@ def add_argument(parser):
         type=float,
         default=1.0,
         help="If provided with `sumstats`, weights the MSE loss for sumstat residuals.",
+    )
+    parser.add_argument(
+        "--negative-sampling-fold",
+        type=int,
+        default=1,
+        help="Fold of negative samples to use during training",
     )
     parser.add_argument(
         "--load-checkpoint",
