@@ -9,7 +9,7 @@ from simba_plus.discovery.model_training import load_results
 import argparse
 import ast
 
-def train_supervised(eval_df, feature_sets, dataset_name, output_path):
+def peak_gene_link_supervised(eval_df, feature_sets, dataset_name, output_path):
     results_obj, metrics_df, preds_df = model_training.train_xgboost(
             df=eval_df,
             dataset_name=dataset_name,
@@ -89,7 +89,7 @@ def main(args):
 
     os.makedirs(args.output_path, exist_ok=True)
 
-    _, metrics_df, preds_df = train_supervised(
+    _, metrics_df, preds_df = peak_gene_link_supervised(
         eval_df=eval_df,
         feature_sets=feature_sets,
         dataset_name=args.dataset_name,
