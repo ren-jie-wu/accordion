@@ -18,7 +18,11 @@ from torch_geometric.transforms.to_device import ToDevice
 import lightning as L
 from lightning.pytorch.tuner import Tuner
 
-from lightning.pytorch.callbacks import ModelCheckpoint, LearningRateMonitor
+from lightning.pytorch.callbacks import (
+    ModelCheckpoint,
+    LearningRateMonitor,
+    OnExceptionCheckpoint,
+)
 from lightning.pytorch.loggers import WandbLogger
 import wandb
 import scanpy as sc
@@ -116,6 +120,7 @@ def run(
     max_epochs: int = 1000,
     verbose: bool = False,
     negative_sampling_fold: int = 1,
+    batch_negative: bool = True,
 ):
     """Train the model with the given parameters.
     If get_adata is True, it will only load the gene/peak/cell AnnData object from the checkpoint.
@@ -174,7 +179,7 @@ def run(
         edge_types=edge_types,
         batch_size=batch_size,
         num_workers=num_workers,
-        negative_sampling_fold=negative_sampling_fold,
+        negative_sampling_fold=0 if batch_negative else negative_sampling_fold,
         logger=logger,
     )
 
@@ -245,6 +250,8 @@ def run(
         nonneg=nonneg,
         logger=logger,
         verbose=verbose,
+        num_neg_samples_fold=negative_sampling_fold,
+        batch_negative=batch_negative,
     ).to(device)
 
     def train(
@@ -282,11 +289,13 @@ def run(
             save_last=True,
         )
         lrmonitor_callback = LearningRateMonitor()
+        onexception_callback = OnExceptionCheckpoint(checkpoint_dir)
         trainer = L.Trainer(
             callbacks=[
                 early_stopping_callback,
                 checkpoint_callback,
                 lrmonitor_callback,
+                # onexception_callback,
             ],
             logger=wandb_logger,
             devices=1,
@@ -471,7 +480,7 @@ def run_eval(args, last_model_path, logger):
         index_path=data_idx_path,
         batch_size=args.batch_size,
         negative_sampling_fold=args.negative_sampling_fold,
-        device=args.device,
+        # device=args.device,
         logger=logger,
     )
     pretty_print(metric_dict, logger=logger)
@@ -517,6 +526,11 @@ def add_argument(parser):
         "--batch-size",
         type=int,
         default=100_000,
+        help="Batch size (number of edges) per DataLoader batch",
+    )
+    parser.add_argument(
+        "--batch-negative",
+        action="store_true",
         help="Batch size (number of edges) per DataLoader batch",
     )
     parser.add_argument(

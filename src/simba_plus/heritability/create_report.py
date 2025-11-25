@@ -10,8 +10,7 @@ from argparse import ArgumentParser
 import scipy
 import simba_plus.datasets._datasets
 from simba_plus.utils import setup_logging
-from simba_plus.heritability.utils import get_overlap
-from simba_plus.post_training.enrichment import run_enrichr
+from simba_plus.heritability.utils import get_overlap, enrichment_analysis
 from simba_plus.heritability.ldsc import run_ldsc_l2, run_ldsc_h2
 from simba_plus.heritability.get_taus import get_tau_z_dep
 
@@ -231,7 +230,10 @@ def main(args, logger=None):
         sumstat_paths_dict,
         f"{args.output_dir}/h2/peak_loadings/",
     )
-
+    adata_G = enrichment_analysis(
+        adata_G,
+        sumstat_paths_dict,
+    )
     sumstat_paths = pd.read_csv(args.sumstats, sep="\t", header=None, index_col=0)[
         1
     ].to_dict()
@@ -245,4 +247,10 @@ def main(args, logger=None):
         cmap="coolwarm",
         show=False,
     ).figure.savefig(f"{args.output_dir}/cell_type_heritability_scores.png")
-    logger.info(f"Generated heritability report at {args.output_dir}/")
+
+    adata_C.write(f"{args.adata_prefix}/adata_C{args.version_suffix}_annotated.h5ad")
+    adata_G.write(f"{args.adata_prefix}/adata_G{args.version_suffix}_annotated.h5ad")
+    adata_P.write(f"{args.adata_prefix}/adata_P{args.version_suffix}_annotated.h5ad")
+    logger.info(
+        f"Generated heritability scores in {args.adata_prefix}/adata_{{C,G,P}}_annotated.h5ad"
+    )

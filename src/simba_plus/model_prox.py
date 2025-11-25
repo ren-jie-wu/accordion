@@ -266,7 +266,6 @@ class AuxParams(nn.Module):
     def kl_div_loss(self, batch, node_weights_dict):
         l = torch.tensor(0.0, device=next(self.parameters()).device)
         for edge_type in batch.edge_types:
-            edge_index = batch[edge_type].edge_index
             src_type, _, dst_type = edge_type
             (
                 src_key,
@@ -312,6 +311,7 @@ class LightningProxModel(L.LightningModule):
         reweight_rarecell: bool = False,
         reweight_rarecell_neighbors: Optional[int] = None,
         verbose: bool = False,
+        batch_negative: bool = True,
     ):
         super().__init__()
         self.save_hyperparameters()
@@ -421,16 +421,16 @@ class LightningProxModel(L.LightningModule):
             pos_edge_index_dict,
             **self.aux_params(batch, pos_edge_index_dict),
         )
-        if neg_sample and batch_alledges is not None:
+        if neg_sample:
             if neg_edge_index_dict is None:
                 neg_edge_index_dict = {}
                 for edge_type in pos_edge_index_dict.keys():
                     src, _, dst = edge_type
                     neg_edge_index = negative_sampling(
-                        batch_alledges[edge_type].edge_index,
+                        batch[edge_type].edge_index,
                         num_nodes=(
-                            batch_alledges[src].num_nodes,
-                            batch_alledges[dst].num_nodes,
+                            batch[src].num_nodes,
+                            batch[dst].num_nodes,
                         ),
                         num_neg_samples=len(pos_edge_index_dict[edge_type])
                         * self.num_neg_samples_fold,
@@ -449,7 +449,7 @@ class LightningProxModel(L.LightningModule):
             pos_edge_weights = pos_edge_weight_dict[edge_type]
             pos_loss = -pos_dist.log_prob(pos_edge_weights).sum()
             loss_dict[edge_type] = pos_loss
-            if neg_sample and batch_alledges is not None:
+            if neg_sample:
                 neg_dist = neg_dist_dict[edge_type]
                 neg_edge_weights = torch.zeros(
                     neg_dist.event_shape, device=pos_edge_weights.device
@@ -601,7 +601,6 @@ class LightningProxModel(L.LightningModule):
         t1 = time.time()
         self.log("time:nll_loss", t1 - t0, on_step=True, on_epoch=False)
         if self.current_epoch >= self.n_no_kl:
-            self.aux_params.noise = True
             t0 = time.time()
             batch_kl_div_loss = self.kl_div_loss(
                 batch,

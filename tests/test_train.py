@@ -181,3 +181,20 @@ def test_simba_eval_command():
 
     # Assert command doesn't fail with basic file issues
     assert result.returncode == 0, f"Command failed with stderr: {result.stderr}"
+
+
+@pytest.mark.order(5)
+def test_simba_heritability_command():
+
+    prefix = f"{os.path.dirname(__file__)}/output/simba+hetdata.dat_100K.d3.randinit.checkpoints/"
+    sumstats = f"{os.path.dirname(__file__)}/../data/sumstats/sumstats_rdw.txt"
+    cmd = [
+        "simba+",
+        "heritability",
+        str(sumstats),
+        str(prefix),
+    ]
+    result = subprocess.run(cmd, capture_output=True, text=True)
+
+    # Assert command doesn't fail with basic file issues
+    assert result.returncode == 0, f"Command failed with stderr: {result.stderr}"

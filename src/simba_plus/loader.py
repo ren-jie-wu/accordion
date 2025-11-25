@@ -44,6 +44,25 @@ class CustomNSMultiIndexDataset(Dataset):
         self.setup_count = 0
         self.negative_sampling_fold = negative_sampling_fold
         self.data = data
+        if negative_sampling_fold == 0:
+            self.edge_index_dict = self.pos_idx_dict
+            print("Permuting edges...")
+            self.lengths = [
+                len(self.edge_index_dict[edge_type]) for edge_type in self.edge_types
+            ]
+            self.total_length = sum(self.lengths)
+            perm_idx = torch.randperm(self.total_length)
+            self.type_assignments = torch.cat(
+                [torch.full((length,), i) for i, length in enumerate(self.lengths)]
+            )[perm_idx]
+            self.permuted_edge_idx = {
+                k: v[torch.randperm(len(v))] for k, v in self.edge_index_dict.items()
+            }
+            self.all_edge_idx = torch.zeros(self.total_length, dtype=torch.long)
+            for i, edge_type in enumerate(self.edge_types):
+                self.all_edge_idx[self.type_assignments == i] = self.permuted_edge_idx[
+                    edge_type
+                ]
 
     def sample_negative(self):
         """Add true negative edges' index"""
@@ -99,27 +118,25 @@ class CustomNSMultiIndexDataset(Dataset):
                     ],
                     dim=0,
                 )
-        else:
-            self.edge_index_dict = self.pos_idx_dict
-        print(f"Negative sampling time: {time.time() - t1:.4f}s")
-        print("Permuting edges...")
-        self.lengths = [
-            len(self.edge_index_dict[edge_type]) for edge_type in self.edge_types
-        ]
-        self.total_length = sum(self.lengths)
-        perm_idx = torch.randperm(self.total_length)
-        self.type_assignments = torch.cat(
-            [torch.full((length,), i) for i, length in enumerate(self.lengths)]
-        )[perm_idx]
-        self.permuted_edge_idx = {
-            k: v[torch.randperm(len(v))] for k, v in self.edge_index_dict.items()
-        }
-        self.all_edge_idx = torch.zeros(self.total_length, dtype=torch.long)
-        for i, edge_type in enumerate(self.edge_types):
-            self.all_edge_idx[self.type_assignments == i] = self.permuted_edge_idx[
-                edge_type
+            print(f"Negative sampling time: {time.time() - t1:.4f}s")
+            print("Permuting edges...")
+            self.lengths = [
+                len(self.edge_index_dict[edge_type]) for edge_type in self.edge_types
             ]
-        print("Negative sampling and permutation done.")
+            self.total_length = sum(self.lengths)
+            perm_idx = torch.randperm(self.total_length)
+            self.type_assignments = torch.cat(
+                [torch.full((length,), i) for i, length in enumerate(self.lengths)]
+            )[perm_idx]
+            self.permuted_edge_idx = {
+                k: v[torch.randperm(len(v))] for k, v in self.edge_index_dict.items()
+            }
+            self.all_edge_idx = torch.zeros(self.total_length, dtype=torch.long)
+            for i, edge_type in enumerate(self.edge_types):
+                self.all_edge_idx[self.type_assignments == i] = self.permuted_edge_idx[
+                    edge_type
+                ]
+            print("Negative sampling and permutation done.")
 
     def __len__(self):
         return self.total_length
