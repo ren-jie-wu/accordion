@@ -16,7 +16,7 @@ import simba_plus.linking.supervised_predict as peak_gene_link_predict
 def main():
     if len(sys.argv) < 2:
         print("Usage: simba+ <subcommand> [args]")
-        print("Available subcommands: load_data, train, eval, predict, train-xgb, heritability")
+        print("Available subcommands: load_data, train, eval, unsupervised-predict, supervised-train, supervised-predict, heritability")
         sys.exit(1)
 
     parser = argparse.ArgumentParser(
@@ -38,11 +38,14 @@ def main():
     heritability_parser = subparsers.add_parser("heritability")
     heritability_parser = create_heritability_report.add_argument(heritability_parser)
 
-    predict_parser = subparsers.add_parser("predict")
-    predict_parser = predict.add_argument(predict_parser)
+    unsupervised_predict_parser = subparsers.add_parser("unsupervised-predict")
+    unsupervised_predict_parser = peak_gene_link_unsupervised.add_argument(unsupervised_predict_parser)
 
-    trainxgb_parser = subparsers.add_parser('train-xgb')
-    trainxgb_parser = train_xgb.add_parser(trainxgb_parser)
+    supervised_train_parser = subparsers.add_parser('supervised-train')
+    supervised_train_parser = peak_gene_link_train.add_parser(supervised_train_parser)
+
+    supervised_predict_parser = subparsers.add_parser('supervised-predict')
+    supervised_predict_parser = peak_gene_link_train.add_parser(supervised_predict_parser)
 
     parsed_args = parser.parse_args()
     subcommand = parsed_args.subcommand
@@ -55,10 +58,12 @@ def main():
         evaluate.main(parsed_args)
     elif subcommand == "heritability":
         create_heritability_report.main(parsed_args)
-    elif subcommand == "predict":
-        predict.main(parsed_args)
-    elif subcommand == "train-xgb":
-        train_xgb.main(parsed_args)
+    elif subcommand == "unsupervised-predict":
+        unsupervised_predict_parser.main(parsed_args)
+    elif subcommand == "supervised-train":
+        supervised_train_parser.main(parsed_args)
+    elif subcommand == "supervised-predict":
+        supervised_predict_parser.main(parsed_args)
 
 
 if __name__ == "__main__":
