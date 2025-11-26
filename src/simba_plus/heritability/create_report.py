@@ -1,6 +1,7 @@
 import pickle as pkl
 from typing import Literal
 import os
+from tqdm.auto import tqdm
 import numpy as np
 import anndata as ad
 import scanpy as sc
@@ -222,9 +223,9 @@ def main(args, logger=None):
             "simba+heritability", log_dir=os.path.dirname(args.adata_prefix)
         )
     if args.output_dir is None:
-        args.output_dir = f"{os.path.dirname(args.adata_prefix)}/heritability/"
+        args.output_dir = f"{args.adata_prefix}/heritability/"
         os.makedirs(args.output_dir, exist_ok=True)
-
+    sumstat_id = os.path.basename(args.sumstats).split(".")[0]
     adata_C, adata_P, adata_G = load_data(
         args.adata_prefix, args.version_suffix, logger
     )
@@ -263,8 +264,7 @@ def main(args, logger=None):
         adata_G,
         sumstat_paths_dict,
     )
-
-    output_filename = f"{args.output_dir}/heritability_report.pdf"
+    output_filename = f"{args.output_dir}/heritability_report_{sumstat_id}.pdf"
     if "factor_enrichments_summary" in adata_G.uns:
         factor_enrichment_labels = [
             adata_G.uns["factor_enrichments_summary"][factor]
@@ -293,7 +293,7 @@ def main(args, logger=None):
         plt.close(fig)
 
         logger.info(f"Generating phenotype enrichment plots...")
-        for pheno in sumstat_paths_dict.keys():
+        for pheno in tqdm(sumstat_paths_dict.keys()):
             fig = simba_plus.plotting.heritability.pheno_enrichment(
                 adata_G, pheno, return_fig=True
             )
@@ -301,9 +301,9 @@ def main(args, logger=None):
             plt.close(fig)
     logger.info(f"Created heritability report at {output_filename}.")
 
-    adata_C.write(f"{args.adata_prefix}/adata_C{args.version_suffix}_annotated.h5ad")
-    adata_G.write(f"{args.adata_prefix}/adata_G{args.version_suffix}_annotated.h5ad")
-    adata_P.write(f"{args.adata_prefix}/adata_P{args.version_suffix}_annotated.h5ad")
+    adata_C.write(f"{args.adata_prefix}/adata_C{args.version_suffix}_{sumstat_id}.h5ad")
+    adata_G.write(f"{args.adata_prefix}/adata_G{args.version_suffix}_{sumstat_id}.h5ad")
+    adata_P.write(f"{args.adata_prefix}/adata_P{args.version_suffix}_{sumstat_id}.h5ad")
     logger.info(
-        f"Heritability annotated AnnDatas saved in {args.adata_prefix}/adata_{{C,G,P}}_annotated.h5ad"
+        f"Heritability annotated AnnDatas saved in {args.adata_prefix}/adata_{{C,G,P}}{args.version_suffix}_{sumstat_id}.h5ad"
     )

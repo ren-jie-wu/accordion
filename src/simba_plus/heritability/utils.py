@@ -90,9 +90,11 @@ def enrichment_analysis(
     adata_G,
     sumstat_paths_dict: dict,
 ):
-
+    # if "pheno_enrichments" in adata_G.uns:
+    #     return adata_G
     geneset_enrichments = {}
     n_genes = {}
+
     for pheno in sumstat_paths_dict.keys():
         if pheno not in geneset_enrichments:
             geneset_enrichments[pheno] = {}

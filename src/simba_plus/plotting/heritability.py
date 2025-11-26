@@ -16,7 +16,8 @@ def factor_herit(
     for i in range(math.ceil(len(pheno_list) / 5)):
         n_panels = min(5, len(pheno_list) - i * 5)
         fig, ax = plt.subplots(
-            n_panels, figsize=(figsize[0], figsize[1] * n_panels), sharex=True
+            n_panels,
+            figsize=(figsize[0], figsize[1] * n_panels),
         )
         if n_panels == 1:
             ax = [ax]
@@ -32,6 +33,7 @@ def factor_herit(
                 *[s.split(" <> ") for s in factor_enrichment_labels]
             )
             ax[0].xaxis.set_tick_params(labeltop="on")
+            ax[0].set_xticks(list(range(len(top_enrichments))))
             ax[0].set_xticklabels(
                 [
                     f"F{i}:{top_enrichments[i].split(':', 1)[1]}"
@@ -40,6 +42,7 @@ def factor_herit(
                 rotation=90,
                 ha="right",
             )
+            ax[j].set_xticks(list(range(len(bot_enrichments))))
             ax[j].set_xticklabels(
                 [
                     f"F{i}:{bot_enrichments[i].split(':', 1)[1]}"
