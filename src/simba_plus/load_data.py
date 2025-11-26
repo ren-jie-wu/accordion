@@ -4,14 +4,27 @@ import numpy as np
 import torch
 from torch_geometric.data import HeteroData
 import warnings
-
 warnings.simplefilter(action="ignore", category=FutureWarning)
 import anndata as ad
-from simba_plus.utils import _make_tensor
+from simba_plus.utils import _make_tensor, is_integer_valued
 import argparse
 
-
 def validate_input(adata_CG, adata_CP):
+    """
+    Validate and extract dimensions from input AnnData objects.
+    It returns the number of cells, genes, peaks, and motifs (-1 if not determined).
+
+    Args:
+        adata_CG (anndata.AnnData or None): AnnData for cell by gene data.
+        adata_CP (anndata.AnnData or None): AnnData for cell by peak data.
+
+    Returns:
+        tuple:
+            n_cells (int): Number of cells determined from provided AnnDatas.
+            n_genes (int): Number of genes (-1 if adata_CG not given).
+            n_peaks (int): Number of peaks (-1 if adata_CP not given).
+            n_motifs (int): Placeholder, always -1.
+    """
     n_cells = n_genes = n_peaks = n_motifs = -1
     if adata_CG is not None:
         n_cells, n_genes = adata_CG.shape
@@ -92,7 +105,7 @@ def make_sc_HetData(
         ).squeeze()  # [num_edges_expresses, num_features_expresses]
         data["cell", "expresses", "gene"].edge_dist = (
             "NegativeBinomial"
-            if np.issubdtype(adata_CG.X.dtype, np.integer)
+            if is_integer_valued(adata_CG.X)
             else "Normal"
         )
 

@@ -122,12 +122,36 @@ def run(
     negative_sampling_fold: int = 1,
     batch_negative: bool = True,
 ):
-    """Train the model with the given parameters.
-    If get_adata is True, it will only load the gene/peak/cell AnnData object from the checkpoint.
-    Parameters
-    ----------
-
     """
+    Train the model with the given parameters.
+
+    Args:
+        data_path (str): The path to the data file.
+        output_dir (str): The output directory.
+        adata_CG (str): The path to the cell adata file.
+        adata_CP (str): The path to the peak adata file.
+        batch_size (int): The batch size of edges for the DataLoader.
+        load_checkpoint (bool): Whether to load the checkpoint.
+        promote_indep (bool): Whether to promote the independence.
+        hidden_dims (int): The number of hidden dimensions.
+        hsic_lam (float): The HSIC regularization lambda.
+        get_adata (bool): Whether to get the adata.
+        pos_scale (bool): Whether to use the positive scale.
+        
+        layers (int): The model layer number. Passed to the LightningProxModel.
+        n_batch_sampling (int): dummy parameter for now.
+        reweight_rarecell (bool): Whether to reweight the rare cell.
+        n_kl_warmup (int): The number of KL warmup.
+        project_decoder (bool): Whether to project the decoder.
+        edgetype_specific_scale (bool): Whether to use the edgetype specific scale.
+        edgetype_specific_std (bool): Whether to use the edgetype specific std.
+        edgetype_specific_bias (bool): Whether to use the edgetype specific bias.
+        nonneg (bool): Whether to use the non-negative constraint.
+    Returns:
+        None
+    """
+
+    # I/O preparation
 
     run_id = get_run_id(
         batch_size=batch_size,
@@ -140,7 +164,7 @@ def run(
         sumstats=sumstats,
         sumstats_lam=sumstats_lam,
     )
-    prefix = f"{output_dir}/"
+    prefix = output_dir
     checkpoint_dir = f"{prefix}/{run_id}.checkpoints/"
     logger = setup_logging(checkpoint_dir)
     os.makedirs(checkpoint_dir, exist_ok=True)
@@ -148,7 +172,7 @@ def run(
     logger.info(f"Run ID: {run_id}")
     logger.info(f"Using {device} as device...")
     # torch.set_default_device(device)
-    data = simba_plus.load_data.load_from_path(data_path)
+    data = simba_plus.load_data.load_from_path(data_path, device=device)
     data.generate_ids()
     for node_type in data.node_types:
         del data[node_type].x
@@ -156,6 +180,7 @@ def run(
     logger.info(f"Data loaded to {data['cell'].n_id.device}: {data}")
     dim_u = hidden_dims
 
+    # Only get adata from the last checkpoint
     if get_adata:
         logger.info(
             "With `--get-adata` flag, only getting adata output from the last checkpoint..."
@@ -351,6 +376,15 @@ def run(
 
 
 def human_format(num):
+    """
+    Convert a number to a human-readable format (e.g. 1000 -> 1K, 1000000 -> 1M)
+
+    Args:
+        num (int): The number to convert.
+    
+    Returns:
+        str: The human-readable format of the number.
+    """
     num = float(f"{num:.3g}")
     magnitude = 0
     while abs(num) >= 1000:
@@ -367,6 +401,14 @@ def save_files(
     checkpoint_suffix: str = "",
     logger=None,
 ):
+    """
+    Save the model parameters and the adata files (cell, peak, and gene embeddings) from the last checkpoint to the checkpoint directory.
+    
+    Args:
+        run_id (str): The run ID (with prefix). Used to load the last checkpoint and save the model parameters and adata files.
+        cell_adata (str): The path to the cell-gene adata file. Optional. Only used to provide cell metadata and gene metadata.
+        peak_adata (str): The path to the cell-peak adata file. Optional. Only used to provide cell metadata (if not provided in cell_adata) and peak metadata.
+    """
     adata_CG = ad.read_h5ad(cell_adata) if cell_adata is not None else None
     adata_CP = ad.read_h5ad(peak_adata) if peak_adata is not None else None
     if last_model_path is None:
@@ -383,7 +425,8 @@ def save_files(
         weights_only=True,
         map_location="cpu",
     )
-
+    
+    # Save the scale and bias of the peak/gene and cell
     if "peak" in model.encoder.__mu_dict__:
         np.save(
             f"{run_id}.checkpoints/peak_logscale.npy",
@@ -430,6 +473,8 @@ def save_files(
             f"{run_id}.checkpoints/cell_gene_bias.npy",
             model.aux_params.bias_dict["cell__cell_expresses_gene"].detach().numpy(),
         )
+    
+    # Save the cell, peak, and gene embedding adata and do umap
     cell_x = model.encoder.__mu_dict__["cell"].detach().cpu()
     obs_use = None
     if adata_CG is not None:
@@ -446,6 +491,7 @@ def save_files(
     )
     sc.pp.neighbors(adata_C)
     sc.tl.umap(adata_C, random_state=2025)
+    
     if "peak" in model.encoder.__mu_dict__:
         adata_P = ad.AnnData(
             X=model.encoder.__mu_dict__["peak"].detach().cpu().numpy(),
@@ -455,6 +501,7 @@ def save_files(
             obs=adata_CP.var if adata_CP is not None else None,
         )
         adata_P.write(f"{run_id}.checkpoints/adata_P{checkpoint_suffix}.h5ad")
+    
     if "gene" in model.encoder.__mu_dict__:
         adata_G = ad.AnnData(
             X=model.encoder.__mu_dict__["gene"].detach().cpu().numpy(),

@@ -1,2 +1,6 @@
-__pycache__/
 *.pyc
+build
+*.egg-info
+*__pycache__
+README.md
+mytest

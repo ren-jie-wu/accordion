@@ -22,6 +22,7 @@ import logging
 import sys
 from pathlib import Path
 from logging.handlers import RotatingFileHandler
+import scipy.sparse as sp
 
 
 def negative_sampling(edge_index, num_nodes, num_neg_samples_fold=1):
@@ -427,3 +428,24 @@ def setup_logging(
     """
     logger.info(ascii_art)
     return logger
+def is_integer_valued(X, tol=1e-8, max_check=100_000):
+    """
+    Check if the values in X are integer-valued.
+    Args:
+        X (numpy.ndarray or scipy.sparse.spmatrix): The input data.
+        tol (float): The tolerance for the comparison.
+        max_check (int): The maximum number of values to check. This is for time efficiency.
+    Returns:
+        bool: True if the values in X are integer-valued, False otherwise.
+    """
+    if np.issubdtype(X.dtype, np.integer):
+        return True
+    
+    data = X.data if sp.issparse(X) else np.asarray(X).ravel()
+    assert data.size > 0, "X is empty"
+
+    if data.size > max_check:
+        idx = np.random.choice(data.size, max_check, replace=False)
+        data = data[idx]
+    
+    return np.allclose(data, np.round(data), atol=tol)
