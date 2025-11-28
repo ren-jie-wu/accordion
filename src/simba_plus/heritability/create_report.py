@@ -219,9 +219,7 @@ def assign_heritability_scores(
 
 def main(args, logger=None):
     if not logger:
-        logger = setup_logging(
-            "simba+heritability", log_dir=os.path.dirname(args.adata_prefix)
-        )
+        logger = setup_logging("simba+heritability", log_dir=args.adata_prefix)
     if args.output_dir is None:
         args.output_dir = f"{args.adata_prefix}/heritability/"
         os.makedirs(args.output_dir, exist_ok=True)
@@ -277,7 +275,7 @@ def main(args, logger=None):
         figs = simba_plus.plotting.heritability.factor_herit(
             adata_C,
             pheno_list=list(sumstat_paths_dict.keys()),
-            figsize=(6, 2),
+            figsize=(2, 6),
             return_fig=True,
             factor_enrichment_labels=factor_enrichment_labels,
         )
