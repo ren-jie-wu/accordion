@@ -57,16 +57,26 @@ class MyEarlyStopping(EarlyStopping):
 
 
 class MyDataModule(L.LightningDataModule):
+    """
+    Lightning DataModule wrapping train/validation DataLoaders with resampled negatives.
+
+    On each call to `train_dataloader()` or `val_dataloader()`, this module
+    triggers `sample_negative()` on the underlying `CustomNSMultiIndexDataset`,
+    so that negative edges are resampled once per epoch. The returned DataLoader
+    then yields batched subgraphs built via the custom `collate` function.
+    """
     def __init__(self, train_loader, val_loader):
         super().__init__()
         self.train_loader = train_loader
         self.val_loader = val_loader
 
     def train_dataloader(self):
+        """Resample negative edges for training and return the DataLoader."""
         self.train_loader.dataset.sample_negative()
         return self.train_loader
 
     def val_dataloader(self):
+        """Resample negative edges for validation and return the DataLoader."""
         self.val_loader.dataset.sample_negative()
         return self.val_loader
 
@@ -135,6 +145,45 @@ def structured_negative_sampling(
 
 
 def get_edge_split_data(data, data_path, edge_types, negative_sampling_fold, logger):
+    """
+    Create or load train/validation edge splits for a heterogeneous graph and wrap them
+    into `CustomNSMultiIndexDataset` objects.
+
+    For each edge type in `edge_types`, randomly permute all observed edges and plit the 
+    permuted indices into approximately 96% train, 2% validation, and 2% test. Save these 
+    index splits as a pickle file at ``<data_path without .dat>_data_idx.pkl``.
+
+    Parameters
+    ----------
+    data : torch_geometric.data.HeteroData
+        Heterogeneous graph containing edges for each edge type. Each edge type
+        is expected to have an `edge_index` tensor and a `num_edges` attribute.
+    data_path : str
+        Path to the serialized HetData file (e.g. ``..._HetData.dat``). This path
+        is used to derive the name of the index file
+        (``<data_path without .dat>_data_idx.pkl``). If the file already exists, 
+        it will be loaded and the train/val/test split will be reconstructed.
+    edge_types : Iterable[Tuple[str, str, str]]
+        Collection of edge types (as 3-tuples, e.g.
+        ``("cell", "expresses", "gene")``) for which splits should be created
+        and datasets constructed.
+    negative_sampling_fold : int
+        Number of negative samples to draw per positive edge inside
+        `CustomNSMultiIndexDataset`. This controls the ratio of negative to
+        positive edges used during training/validation.
+    logger : logging.Logger
+        Logger used to report progress and information about the created splits.
+
+    Returns
+    -------
+    train_data : CustomNSMultiIndexDataset
+        Dataset wrapping the training positive-edge indices for all specified
+        edge types and performing on-the-fly negative sampling.
+    val_data : CustomNSMultiIndexDataset
+        Dataset wrapping the validation positive-edge indices for all specified
+        edge types and performing on-the-fly negative sampling.
+    """
+
     data_idx_path = f"{data_path.split('.dat')[0]}_data_idx.pkl"
     if os.path.exists(data_idx_path):
         # Load existing train/val/test split
@@ -258,6 +307,33 @@ def get_edge_split_datamodule(
 
 
 def get_dataloader(train_data, val_data, data, batch_size, num_workers: int = 30):
+    """
+    Construct PyTorch DataLoaders for train and validation datasets.
+
+    Uses the custom `collate` function to turn a batch of
+    `(edge_type, edge_index, full_data)` samples from `CustomNSMultiIndexDataset`
+    into a subgraph `HeteroData` object.
+
+    Parameters
+    ----------
+    train_data : CustomNSMultiIndexDataset
+        Dataset used for training.
+    val_data : CustomNSMultiIndexDataset
+        Dataset used for validation.
+    data : torch_geometric.data.HeteroData
+        Full heterogeneous graph (not used directly here, kept for compatibility).
+    batch_size : int
+        Number of edges per batch.
+    num_workers : int, optional
+        Number of worker processes for the DataLoaders, by default 30.
+
+    Returns
+    -------
+    train_loader : torch.utils.data.DataLoader
+        DataLoader yielding per-batch subgraphs for training.
+    val_loader : torch.utils.data.DataLoader
+        DataLoader yielding per-batch subgraphs for validation.
+    """
     # collate_ = partial(collate, data=data)
 
     train_loader = DataLoader(

@@ -131,6 +131,7 @@ def run(
         adata_CG (str): The path to the cell adata file.
         adata_CP (str): The path to the peak adata file.
         batch_size (int): The batch size of edges for the DataLoader.
+        batch_negative (bool): Whether to batch the negative edges.
         load_checkpoint (bool): Whether to load the checkpoint.
         promote_indep (bool): Whether to promote the independence.
         hidden_dims (int): The number of hidden dimensions.
@@ -198,6 +199,7 @@ def run(
     if "peak" in data.node_types and "gene" in data.node_types:
         edge_types = [("cell", "has_accessible", "peak"), ("cell", "expresses", "gene")]
 
+    # construct train/val dataloaders; batch_negative=True won't do negative sampling
     pldata = get_edge_split_datamodule(
         data=data,  # ToDevice(device)(data),
         data_path=data_path,

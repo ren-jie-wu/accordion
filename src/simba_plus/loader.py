@@ -27,12 +27,33 @@ class CustomIndexDataset(Dataset):
 
 
 class CustomNSMultiIndexDataset(Dataset):
+    """
+    Multi-edge-type dataset with optional negative sampling for heterogeneous graphs.
+    """"
     def __init__(
         self,
         pos_idx_dict: dict[EdgeType, torch.Tensor],
         data: torch_geometric.data.HeteroData,
         negative_sampling_fold: int = 1,
     ):
+        """
+        Initialize the dataset.  
+        If negative_sampling_fold is 0, no negative sampling is performed; 
+        use all positive edges and permute them.
+
+        Parameters
+        ----------
+        pos_idx_dict : dict[EdgeType, torch.Tensor]
+            Dictionary of positive edge indices for each edge type.
+        data : torch_geometric.data.HeteroData
+            HeteroData object containing the graph data.
+        negative_sampling_fold : int, optional
+            Number of negative samples to draw per positive edge.
+
+        Returns
+        -------
+        None
+        """
         assert len(pos_idx_dict) > 0, "pos_idx_dict must not be empty"
         self.pos_idx_dict = pos_idx_dict
         self.edge_types = list(pos_idx_dict.keys())
@@ -44,7 +65,7 @@ class CustomNSMultiIndexDataset(Dataset):
         self.setup_count = 0
         self.negative_sampling_fold = negative_sampling_fold
         self.data = data
-        if negative_sampling_fold == 0:
+        if negative_sampling_fold == 0: # No negative sampling; use all positive edges and permute them
             self.edge_index_dict = self.pos_idx_dict
             print("Permuting edges...")
             self.lengths = [
@@ -54,7 +75,7 @@ class CustomNSMultiIndexDataset(Dataset):
             perm_idx = torch.randperm(self.total_length)
             self.type_assignments = torch.cat(
                 [torch.full((length,), i) for i, length in enumerate(self.lengths)]
-            )[perm_idx]
+            )[perm_idx] # total_length list of edge type indices
             self.permuted_edge_idx = {
                 k: v[torch.randperm(len(v))] for k, v in self.edge_index_dict.items()
             }
@@ -62,10 +83,33 @@ class CustomNSMultiIndexDataset(Dataset):
             for i, edge_type in enumerate(self.edge_types):
                 self.all_edge_idx[self.type_assignments == i] = self.permuted_edge_idx[
                     edge_type
-                ]
+                ] # total_length list of edge indices
 
     def sample_negative(self, device=None):
-        """Add true negative edges' index"""
+        """
+        (Re)generate negative edges and build a flattened, permuted index.
+
+        Copies the original `HeteroData` into `self.full_data`. If
+        `negative_sampling_fold > 0`, for each edge type it samples additional
+        negative edges using `torch_geometric.utils.negative_sampling`, appends
+        them (with edge_attr = 0) to `full_data[edge_type]`, and updates
+        `edge_index_dict`, `type_assignments`, and `all_edge_idx` to include both
+        positive and negative edges.
+
+        Parameters
+        ----------
+        device : torch.device, optional
+            Dummy parameter for now.
+
+        Returns
+        -------
+        None
+
+        Notes
+        -----
+        Should be called at least once before training; can be called once per
+        epoch to resample negatives.
+        """
         t1 = time.time()
         self.setup_count += 1
         if device is None:
@@ -106,7 +150,7 @@ class CustomNSMultiIndexDataset(Dataset):
                 self.edge_index_dict[edge_type] = torch.cat(
                     [
                         self.pos_idx_dict[edge_type],
-                        torch.arange(
+                        torch.arange( # negative edges are assigned indices n_pos, ..., n_pos+n_neg-1
                             self.data[edge_type].edge_index.size(1),
                             (
                                 self.data[edge_type].edge_index.size(1)
@@ -122,7 +166,7 @@ class CustomNSMultiIndexDataset(Dataset):
             print("Permuting edges...")
             self.lengths = [
                 len(self.edge_index_dict[edge_type]) for edge_type in self.edge_types
-            ]
+            ] # include both positive and negative edges
             self.total_length = sum(self.lengths)
             perm_idx = torch.randperm(self.total_length)
             self.type_assignments = torch.cat(
@@ -139,9 +183,29 @@ class CustomNSMultiIndexDataset(Dataset):
             print("Negative sampling and permutation done.")
 
     def __len__(self):
+        """Total number of edges (positive + negative) across all edge types"""
         return self.total_length
 
     def __getitem__(self, idx):
+        """
+        Get a single edge sample (positive or negative) by index.
+
+        Parameters
+        ----------
+        idx : int
+            Index of the edge to get.
+
+        Returns
+        -------
+        edge_type : EdgeType
+            The edge type (e.g. `("cell", "expresses", "gene")`) of this sample.
+        sample_idx : int
+            Index from `full_data[edge_type].edge_index`.  
+            If it is a negative edge index, then `sample_idx` >= `self.data[edge_type].edge_index.size(1)`
+            and `edge_attr` is zero.
+        full_data : HeteroData
+            The graph containing all positive and (optionally) negative edges.
+        """
         edge_type = self.edge_types[self.type_assignments[idx]]
         sample_idx = self.all_edge_idx[idx]
         res = (edge_type, sample_idx.item(), self.full_data)
@@ -149,6 +213,19 @@ class CustomNSMultiIndexDataset(Dataset):
 
 
 def collate(batches):
+    """
+    Collate function: build a batched subgraph from edge-level samples.
+
+    Parameters
+    ----------
+    batches : list[tuple]
+        List of `(edge_type, edge_index, full_data)` samples.
+
+    Returns
+    -------
+    torch_geometric.data.HeteroData
+        A subgraph containing only the edges and nodes involved in this batch.
+    """
     graph_batch = {}
     full_data = batches[0][2]
 
