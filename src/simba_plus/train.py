@@ -164,8 +164,8 @@ def run(
         sumstats=sumstats,
         sumstats_lam=sumstats_lam,
     )
-    prefix = output_dir
-    checkpoint_dir = f"{prefix}/{run_id}.checkpoints/"
+    prefix = os.path.normpath(output_dir)
+    checkpoint_dir = os.path.join(prefix, f"{run_id}.checkpoints/")
     logger = setup_logging(checkpoint_dir)
     os.makedirs(checkpoint_dir, exist_ok=True)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -186,7 +186,7 @@ def run(
             "With `--get-adata` flag, only getting adata output from the last checkpoint..."
         )
         save_files(
-            f"{prefix}{run_id}",
+            os.path.join(prefix, run_id),
             cell_adata=adata_CG,
             peak_adata=adata_CP,
             checkpoint_suffix=checkpoint_suffix,
@@ -361,9 +361,9 @@ def run(
         rpvgae,
         run_id=run_id,
     )
-    torch.save(rpvgae.state_dict(), f"{prefix}{run_id}.model")
+    torch.save(rpvgae.state_dict(), os.path.join(prefix, f"{run_id}.model"))
     save_files(
-        f"{prefix}{run_id}",
+        os.path.join(prefix, run_id),
         last_model_path,
         cell_adata=adata_CG,
         peak_adata=adata_CP,
