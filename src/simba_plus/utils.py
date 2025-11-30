@@ -288,6 +288,32 @@ def get_edge_split_datamodule(
     negative_sampling_fold,
     logger,
 ):
+    """
+    Build a Lightning DataModule for training and validation on a 
+    heterogeneous graph with positive and optionally negative edges.
+
+    Parameters
+    ----------
+    data : torch_geometric.data.HeteroData
+        Full heterogeneous graph.
+    data_path : str
+        Path to the serialized HetData file, used for persistent train/val/test splits.
+    edge_types : Iterable[EdgeType]
+        Edge types to include in training/validation.
+    batch_size : int
+        Number of edges per batch (across all edge types).
+    num_workers : int
+        Number of worker processes for the DataLoader.
+    negative_sampling_fold : int
+        Number of negatives per positive edge used by the dataset.
+    logger : logging.Logger
+        Logger for reporting progress.
+
+    Returns
+    -------
+    MyDataModule
+        Lightning DataModule providing train/validation dataloaders.
+    """
     train_data, val_data = get_edge_split_data(
         data=data,
         edge_types=edge_types,
@@ -295,6 +321,13 @@ def get_edge_split_datamodule(
         negative_sampling_fold=negative_sampling_fold,
         logger=logger,
     )
+
+    # resample before dataloader creation in case the dataloader only sees 
+    # the length of the dataset as positive edge number
+    if negative_sampling_fold > 0:
+        train_data.sample_negative()
+        val_data.sample_negative()
+
     train_loader, val_loader = get_dataloader(
         train_data=train_data,
         val_data=val_data,
