@@ -87,7 +87,7 @@ class CustomNSMultiIndexDataset(Dataset):
                     num_neg_samples=len(self.pos_idx_dict[edge_type])
                     * self.negative_sampling_fold,
                     method="dense",
-                ).to("cpu")
+                ).to(self.data[edge_type].edge_index.device)
                 self.full_data[edge_type].edge_index = torch.cat(
                     [self.data[edge_type].edge_index, neg_edge_index], dim=1
                 )
@@ -165,6 +165,7 @@ def collate(batches):
                 k: torch.tensor(
                     v,
                     dtype=torch.long,
+                    device=full_data[k].edge_index.device,
                 )
                 for k, v in graph_batch.items()
             }
