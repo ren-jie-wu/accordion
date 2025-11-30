@@ -422,7 +422,7 @@ def save_files(
     )
     model = LightningProxModel.load_from_checkpoint(
         last_model_path,
-        weights_only=True,
+        weights_only=False,
         map_location="cpu",
     )
     
