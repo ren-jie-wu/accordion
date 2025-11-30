@@ -287,7 +287,7 @@ def get_node_weights(
     node_weights_path = os.path.join(checkpoint_dir, "node_weights_dict.pt")
     if os.path.exists(node_weights_path):
         try:
-            loaded = torch.load(node_weights_path, map_location="cpu")
+            loaded = torch.load(node_weights_path, map_location="cpu", weights_only=False)
             # Convert loaded values to device tensors if needed
             node_weights_dict = {
                 k: (

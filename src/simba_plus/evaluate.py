@@ -306,7 +306,7 @@ def evaluate_model(
     index_dict = {tuple(k.split("__")): v for k, v in data_idx[eval_split].items()}
     metric_dict = {}
 
-    model = LightningProxModel.load_from_checkpoint(model_path, weights_only=True)
+    model = LightningProxModel.load_from_checkpoint(model_path, weights_only=False)
     logger.info(f"Loaded model from {model_path}.")
     model.eval()
     if ("cell", "expresses", "gene") in index_dict.keys():

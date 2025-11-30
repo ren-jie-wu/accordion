@@ -14,7 +14,7 @@ def save_files(prefix, adata_CG_path, adata_CP_path, checkpoint_version_suffix="
     adata_CP = ad.read_h5ad(adata_CP_path)
     model = LightningProxModel.load_from_checkpoint(
         f"{prefix}.checkpoints/last{checkpoint_version_suffix}.ckpt",
-        weights_only=True,
+        weights_only=False,
         map_location="cpu",
     )
     np.save(
