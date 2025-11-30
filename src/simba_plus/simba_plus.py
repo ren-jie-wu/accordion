@@ -40,7 +40,7 @@ def main():
     eval_parser = evaluate.add_argument(eval_parser)
 
     factors_parser = subparsers.add_parser("factors")
-    factors_parser = evaluate.add_argument(factors_parser)
+    factors_parser = factors.add_argument(factors_parser)
 
     heritability_parser = subparsers.add_parser("heritability")
     heritability_parser = create_heritability_report.add_argument(heritability_parser)

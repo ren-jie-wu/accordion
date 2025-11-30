@@ -63,9 +63,8 @@ class NormalDataDecoder(ProximityDecoder):
 
         cos = torch.nn.CosineSimilarity()
         loc = scale * cos(u, v) + src_bias + dst_bias
-        # std = F.softplus(src_std + dst_std) + EPS
         std = torch.exp(src_std + dst_std)
-        return D.Normal(loc, std)  # std, validate_args=True)
+        return D.Normal(loc, std)
 
 
 class GammaDataDecoder(ProximityDecoder):

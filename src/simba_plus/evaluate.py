@@ -92,11 +92,6 @@ def get_gexp_metrics(
     gexp_std = gexp_mat.std(axis=0)
     cell_std = gexp_mat.std(axis=1)
 
-    gexp_norm = (
-        (gexp_mat - gexp_mean - cell_mean[:, None])
-        / (gexp_std + 1e-6)
-        / (cell_std[:, None] + 1e-6)
-    )
     gexp_dataset = CustomNSMultiIndexDataset(
         {
             gexp_edge_type: torch.sort(index_dict[gexp_edge_type])[0],
@@ -183,25 +178,13 @@ def get_gexp_metrics(
     #     pred_cell_scale = pred_cell_scale.mean(axis=0)
     # pred_gene_scale = pred_gene_scale.exp().numpy()
     # pred_cell_scale = pred_cell_scale.exp().numpy()
-
     res_out = test_dense_mat.toarray()
-    # res_out_norm = (
-    #     (res_out - pred_gene_mean - pred_cell_mean[:, None])
-    #     / (pred_gene_scale + 1e-6)
-    #     / (pred_cell_scale[:, None] + 1e-6)
-    # )
-    # res_out_norm = (
-    #     (res_out - gexp_mean - cell_mean[:, None])
-    #     / (gexp_std + 1e-6)
-    #     / (cell_std[:, None] + 1e-6)
-    # )
+
     corrs = []
     spearman_corrs = []
     for i in range(res_out.shape[1]):
-        if gexp_mean[i] <= 10:
-            continue
         nonzero_idx = mask[:, i]
-        if nonzero_idx.sum() == 0:
+        if nonzero_idx.sum() < 10:
             continue
         if len(np.unique(gexp_mat[nonzero_idx, i])) == 1:
             continue

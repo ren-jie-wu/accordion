@@ -79,7 +79,7 @@ class CustomNSMultiIndexDataset(Dataset):
             for edge_type in self.edge_types:
                 src, _, dst = edge_type
                 neg_edge_index = torch_geometric.utils.negative_sampling(
-                    self.data[edge_type].edge_index.to(device),
+                    self.data[edge_type].edge_index,
                     num_nodes=(
                         self.data[src].num_nodes,
                         self.data[dst].num_nodes,
