@@ -471,7 +471,9 @@ def get_nll_scales(
     train_data = pldata.train_loader.dataset
     val_data = pldata.val_loader.dataset
     n_edges = train_data.total_length
+    n_pos_edges = sum(len(train_data.pos_idx_dict[etype]) for etype in train_data.edge_types)
     n_val_edges = val_data.total_length
+    n_val_pos_edges = sum(len(val_data.pos_idx_dict[etype]) for etype in val_data.edge_types)
 
     if scale_with_pos_edges_only:
         nll_scale = n_dense_edges / n_pos_edges
