@@ -436,7 +436,35 @@ def get_nll_scales(
     n_batches,
     n_val_batches,
     logger,
+    scale_with_pos_edges_only: bool = True
 ):
+    """
+    Compute scaling factors as n_dense_edges/n_edges to rescale sampled NLL to a dense-edge equivalent
+
+    Parameters
+    ----------
+    data : torch_geometric.data.HeteroData
+        Full heterogeneous graph.
+    pldata : L.LightningDataModule
+        Lightning DataModule providing train/validation dataloaders.
+    edge_types : Iterable[EdgeType]
+        Edge types to include in training/validation.
+    logger : logging.Logger
+    scale_with_pos_edges_only : bool
+        Whether to scale with only positive edges.
+
+    Returns
+    -------
+    nll_scale : float
+        Scaling factor for NLL.
+    val_nll_scale : float
+        Scaling factor for validation NLL.
+
+    Notes
+    -----
+    Previous version in fact scale with only positive edges, thus this is set as default. 
+    Consider changing default to False in the future. #TODO
+    """
     n_dense_edges = 0
     for src_nodetype, _, dst_nodetype in edge_types:
         n_dense_edges += data[src_nodetype].num_nodes * data[dst_nodetype].num_nodes
@@ -445,8 +473,12 @@ def get_nll_scales(
     n_edges = train_data.total_length
     n_val_edges = val_data.total_length
 
-    nll_scale = n_dense_edges / n_edges
-    val_nll_scale = n_dense_edges / n_val_edges
+    if scale_with_pos_edges_only:
+        nll_scale = n_dense_edges / n_pos_edges
+        val_nll_scale = n_dense_edges / n_val_pos_edges
+    else:
+        nll_scale = n_dense_edges / n_edges
+        val_nll_scale = n_dense_edges / n_val_edges
     logger.info(
         f"Scaling KL divergence loss with NLL scaling factor:{nll_scale}, {val_nll_scale}"
     )

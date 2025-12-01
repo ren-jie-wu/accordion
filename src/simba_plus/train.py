@@ -219,14 +219,14 @@ def run(
     )
     n_batches = (
         pldata.train_loader.dataset.total_length
-        * (1 + negative_sampling_fold)
+        # * (1 + negative_sampling_fold)
         // batch_size
         + 1
     )
     logger.info(f"@N_BATCHES:{n_batches}")
     n_val_batches = (
         pldata.val_loader.dataset.total_length
-        * (1 + negative_sampling_fold)
+        # * (1 + negative_sampling_fold)
         // batch_size
         + 1
     )
