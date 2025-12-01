@@ -46,6 +46,10 @@ class HSIC(nn.Module):
         """
         Compute kernel matrix for the input data.
 
+        If linear, $K = X X^T$.
+        
+        If RBF, $K = \exp(-\frac{||X - X^T||^2}{2 \sigma^2})$.
+
         Args:
             X (torch.Tensor): Input data
             kernel_type (str): Type of kernel ('rbf' or 'linear')
@@ -90,7 +94,15 @@ class HSIC(nn.Module):
 
     def pair_loss(self, x, y) -> torch.Tensor:
         """
-        Compute HSIC between X and Y.
+        Compute HSIC between X and Y and return its squared value.
+
+        $$
+        \widehat{\text{HSIC}} = \frac{1}{n(n-3)}\Big[
+        \sum_{i \neq j} K_{ij} L_{ij}
+        + \frac{1}{(n-1)(n-2)} \sum_{i \neq j}K_{ij}\sum_{i \neq j}L_{ij}
+        - \frac{2}{n-2}\sum_i \sum_{j \neq i}K_{ij}\sum_{k \neq i}L_{ik}
+        \Big]
+        $$
 
         Args:
             X (torch.Tensor): First variable (n x d1)
@@ -124,6 +136,11 @@ class HSIC(nn.Module):
         return loss**2
 
     def forward(self, X):
+        """
+        Compute pairloss between all pairs of features of X. If subset_samples is not None,
+        sample subset_samples features randomly, compute HSIC on the subset, and scale the 
+        loss back to the original size.
+        """
         hsic_total = torch.tensor(0.0, device=X.device)
         n, d = X.shape
         if self.subset_samples is not None:

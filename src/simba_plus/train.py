@@ -126,28 +126,34 @@ def run(
     Train the model with the given parameters.
 
     Args:
-        data_path (str): The path to the data file.
-        output_dir (str): The output directory.
-        adata_CG (str): The path to the cell adata file.
-        adata_CP (str): The path to the peak adata file.
+        # can be specified in CLI
+        data_path (str): The path to the data file (hetdata.dat or similar).
+        adata_CG (str): The path to the cell adata file. Only used to provide cell metadata and gene metadata.
+        adata_CP (str): The path to the peak adata file. Only used to provide cell metadata (if not provided in adata_CG) and peak metadata.
         batch_size (int): The batch size of edges for the DataLoader.
-        batch_negative (bool): Whether to batch the negative edges.
-        load_checkpoint (bool): Whether to load the checkpoint.
-        promote_indep (bool): Whether to promote the independence.
+        batch_negative (bool, default=True): If True, datamodule construction will not do negative sampling.
+        output_dir (str): The output directory.
+        sumstats (str): The path to a TSV file with trait name and path to GWAS summary statistics file per line.
+        sumstats_lam (float): The weight of the loss for sumstats residual.
+        negative_sampling_fold (int, default=1): The ratio of negative samples to positive samples when constructing the datamodule. If 0, datamodule construction will not do negative sampling.
+        load_checkpoint (bool, default=False): Whether to load the checkpoint. If True, model as well as best learning rate found previously will be loaded from the last checkpoint
+        checkpoint_suffix (str, default=""): The suffix of the checkpoint filename. The full path should be f"{checkpoint_dir}/last{checkpoint_suffix}.ckpt"
         hidden_dims (int): The number of hidden dimensions.
-        hsic_lam (float): The HSIC regularization lambda.
-        get_adata (bool): Whether to get the adata.
-        pos_scale (bool): Whether to use the positive scale.
+        hsic_lam (float): The HSIC regularization lambda. Will be scaled by the number of batches.
+        get_adata (bool, default=False): If True, only fetch the last checkpoint, save AnnData outputs and exit.
+        num_workers (int, default=2): The number of workers for data loading and LDSC.
+        early_stopping_steps (int, default=10): The number of epochs for early stopping patience.
+        max_epochs (int, default=1000): The number of max epochs for training.
+        verbose (bool, default=False): If True, enables verbose logging.
         
-        layers (int): The model layer number. Passed to the LightningProxModel.
-        n_batch_sampling (int): dummy parameter for now.
-        reweight_rarecell (bool): Whether to reweight the rare cell.
-        n_kl_warmup (int): The number of KL warmup.
-        project_decoder (bool): Whether to project the decoder.
-        edgetype_specific_scale (bool): Whether to use the edgetype specific scale.
-        edgetype_specific_std (bool): Whether to use the edgetype specific std.
-        edgetype_specific_bias (bool): Whether to use the edgetype specific bias.
-        nonneg (bool): Whether to use the non-negative constraint.
+        # other parameters
+        n_batch_sampling (int): Dummy parameter for now.
+        n_no_kl (int): ... passed to LightningProxModel.
+        n_kl_warmup (int): ... passed to LightningProxModel.
+        edgetype_specific (bool): ... passed to LightningProxModel.
+        nonneg (bool): ... passed to LightningProxModel.
+        ldsc_res (pd.DataFrame): per-SNP LD score regression residuals from get_residual(). Used to promote peak loading explaining GWAS residual.
+        
     Returns:
         None
     """
@@ -210,6 +216,7 @@ def run(
         logger=logger,
     )
 
+    # calculate some model parameters
     node_weights_dict = get_node_weights(
         data=data,
         pldata=pldata,
@@ -241,10 +248,10 @@ def run(
     )
 
     if hsic_lam != 0:
-        cell_edge_types = []
-        for edge_type in edge_types:
-            if edge_type[0] == "cell" or edge_type[1] == "cell":
-                cell_edge_types.append(edge_type)
+        # cell_edge_types = []
+        # for edge_type in edge_types:
+        #     if edge_type[0] == "cell" or edge_type[1] == "cell":
+        #         cell_edge_types.append(edge_type)
         hsic_lam = n_batches * hsic_lam
         logger.info(f"lambda_HSIC= {hsic_lam}")
         hsic = HSIC(
@@ -267,14 +274,14 @@ def run(
         n_latent_dims=dim_u,
         device=device,
         edgetype_specific=edgetype_specific,
-        hsic=hsic,
-        herit_loss=herit_loss,
+        hsic=hsic, # calculated
+        herit_loss=herit_loss, # calculated
         herit_loss_lam=sumstats_lam,
         n_no_kl=n_no_kl,
         n_kl_warmup=n_kl_warmup,
-        nll_scale=nll_scale,
-        val_nll_scale=val_nll_scale,
-        node_weights_dict=node_weights_dict,
+        nll_scale=nll_scale, # calculated
+        val_nll_scale=val_nll_scale, # calculated
+        node_weights_dict=node_weights_dict, # calculated
         nonneg=nonneg,
         logger=logger,
         verbose=verbose,
@@ -287,6 +294,7 @@ def run(
         early_stopping_steps=early_stopping_steps,
         run_id="",
     ):
+        # prepare wandb logger
         code_directory_path = os.path.dirname(os.path.abspath(__file__))
         wandb_logger = WandbLogger(project=f"pyg_simba_{output_dir.replace('/', '_')}")
         code_artifact = wandb.Artifact("my-python-code", type="code")
@@ -304,6 +312,8 @@ def run(
                 "edgetype_specific": edgetype_specific,
             }
         )
+
+        # prepare callbacks
         early_stopping_callback = MyEarlyStopping(
             monitor="val_nll_loss",
             mode="min",
@@ -318,6 +328,8 @@ def run(
         )
         lrmonitor_callback = LearningRateMonitor()
         onexception_callback = OnExceptionCheckpoint(checkpoint_dir)
+        
+        # core process: Tuner(trainer).lr_find() -> trainer.fit()
         trainer = L.Trainer(
             callbacks=[
                 early_stopping_callback,

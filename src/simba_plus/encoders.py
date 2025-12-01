@@ -11,6 +11,9 @@ class TransEncoder(torch.nn.Module):
         *args,
         **kwargs,
     ):
+        """
+        Initialize parameter dicts mu and logstd. The keys are the node types and the values are num_nodes_per_node_type x n_latent_dims tensors.
+        """
         super().__init__()
         # better initialization: create empty parameters and use a controlled initializer
         self.__mu_dict__ = torch.nn.ParameterDict()
@@ -34,6 +37,7 @@ class TransEncoder(torch.nn.Module):
         return self.forward(batch, *args, **kwargs)
 
     def forward(self, batch, *args, **kwargs):
+        """Returns the mu and logstd dicts for the given batch."""
         mu_dict = {
             node_type: self.__mu_dict__[node_type][batch[node_type].n_id, :]
             for node_type in batch.node_types
