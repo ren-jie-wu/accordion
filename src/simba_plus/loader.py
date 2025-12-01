@@ -29,7 +29,7 @@ class CustomIndexDataset(Dataset):
 class CustomNSMultiIndexDataset(Dataset):
     """
     Multi-edge-type dataset with optional negative sampling for heterogeneous graphs.
-    """"
+    """
     def __init__(
         self,
         pos_idx_dict: dict[EdgeType, torch.Tensor],

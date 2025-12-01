@@ -184,7 +184,7 @@ def get_edge_split_data(data, data_path, edge_types, negative_sampling_fold, log
         edge types and performing on-the-fly negative sampling.
     """
 
-    data_idx_path = f"{Path(data_path).with_suffix("")}_data_idx.pkl"
+    data_idx_path = f"{Path(data_path).with_suffix('')}_data_idx.pkl"
     if os.path.exists(data_idx_path):
         # Load existing train/val/test split
         train_idxs = {}
