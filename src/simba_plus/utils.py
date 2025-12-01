@@ -184,7 +184,7 @@ def get_edge_split_data(data, data_path, edge_types, negative_sampling_fold, log
         edge types and performing on-the-fly negative sampling.
     """
 
-    data_idx_path = f"{data_path.split('.dat')[0]}_data_idx.pkl"
+    data_idx_path = f"{Path(data_path).with_suffix("")}_data_idx.pkl"
     if os.path.exists(data_idx_path):
         # Load existing train/val/test split
         train_idxs = {}
@@ -393,6 +393,24 @@ def get_node_weights(
     logger,
     device: torch.device,
 ):
+    """
+    Compute or load per-node weights as 1/(degree+1).
+    
+    Parameters
+    ----------
+    data : torch_geometric.data.HeteroData
+        Full heterogeneous graph.
+    pldata : L.LightningDataModule
+        Lightning DataModule providing train/validation dataloaders. Dummy parameter for now.
+    checkpoint_dir : str
+        Directory to save/load node weights.
+    logger : logging.Logger
+
+    Returns
+    -------
+    node_weights_dict : dict
+        Dictionary of per-node-type weights.
+    """
     node_weights_path = os.path.join(checkpoint_dir, "node_weights_dict.pt")
     if os.path.exists(node_weights_path):
         try:
@@ -409,8 +427,10 @@ def get_node_weights(
             logger.info(f"Loaded node_weights_dict from {node_weights_path}")
         except Exception as e:  # pragma: no cover - best-effort load
             logger.info(
-                f"Failed to load node_weights_dict from {node_weights_path}: {e}"
+                f"Failed to load node_weights_dict from {node_weights_path}: {e}; recomputing node weights..."
             )
+            os.remove(node_weights_path)
+            return get_node_weights(data, pldata, checkpoint_dir, logger, device)
     else:
         logger.info("Computing node weights...")
         node_counts_dict = {
