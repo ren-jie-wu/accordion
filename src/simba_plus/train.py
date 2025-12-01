@@ -93,7 +93,7 @@ def get_run_id(
     sumstats_lam: float = 1.0,
     **kwargs,
 ):
-    return f"simba+{os.path.basename(data_path).split('_HetData.dat')[0]}_{human_format(batch_size)}{'x'+str(n_batch_sampling) if n_batch_sampling > 1 else ''}{'.indep2_' + format(hsic_lam, '1.0e') if hsic_lam != 0 else ''}{os.path.basename(sumstats).split('.txt')[0] if sumstats is not None else ''}{'_'+format(sumstats_lam, '1.0e') if sumstats is not None and sumstats_lam != 1.0 else ''}{'.d' + str(hidden_dims) if hidden_dims != 50 else ''}{'.en' if not edgetype_specific else ''}{'.nn' if nonneg else ''}.randinit"
+    return f"simba+{os.path.basename(data_path).split('_hetdata.dat')[0]}_{human_format(batch_size)}{'x'+str(n_batch_sampling) if n_batch_sampling > 1 else ''}{'.indep2_' + format(hsic_lam, '1.0e') if hsic_lam != 0 else ''}{os.path.basename(sumstats).split('.txt')[0] if sumstats is not None else ''}{'_'+format(sumstats_lam, '1.0e') if sumstats is not None and sumstats_lam != 1.0 else ''}{'.d' + str(hidden_dims) if hidden_dims != 50 else ''}{'.en' if not edgetype_specific else ''}{'.nn' if nonneg else ''}.randinit"
 
 
 def run(
@@ -570,7 +570,7 @@ def main(args):
 def add_argument(parser):
     parser.description = "Train SIMBA+ model on the given HetData object."
     parser.add_argument(
-        "data_path", help="Path to the input data file (HetData.dat or similar)"
+        "data_path", help="Path to the input data file (hetdata.dat or similar)"
     )
     parser.add_argument(
         "--adata-CG",

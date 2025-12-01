@@ -159,7 +159,7 @@ def get_edge_split_data(data, data_path, edge_types, negative_sampling_fold, log
         Heterogeneous graph containing edges for each edge type. Each edge type
         is expected to have an `edge_index` tensor and a `num_edges` attribute.
     data_path : str
-        Path to the serialized HetData file (e.g. ``..._HetData.dat``). This path
+        Path to the serialized HetData file (e.g. ``..._hetdata.dat``). This path
         is used to derive the name of the index file
         (``<data_path without .dat>_data_idx.pkl``). If the file already exists, 
         it will be loaded and the train/val/test split will be reconstructed.
@@ -439,8 +439,8 @@ def get_node_weights(
         }
         for edge_type in data.edge_types:
             src, _, dst = edge_type
-            node_counts_dict[src] += degree(data[edge_type].edge_index[0].to(device))
-            node_counts_dict[dst] += degree(data[edge_type].edge_index[1].to(device))
+            node_counts_dict[src] += degree(data[edge_type].edge_index[0].to(device), num_nodes=data[src].num_nodes)
+            node_counts_dict[dst] += degree(data[edge_type].edge_index[1].to(device), num_nodes=data[dst].num_nodes)
 
         node_weights_dict = {k: 1.0 / v for k, v in node_counts_dict.items()}
         logger.info(f"Saving node weights to {node_weights_path}...")
