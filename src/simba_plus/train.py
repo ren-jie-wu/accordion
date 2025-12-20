@@ -24,7 +24,7 @@ from lightning.pytorch.callbacks import (
     LearningRateMonitor,
     OnExceptionCheckpoint,
 )
-from lightning.pytorch.loggers import WandbLogger
+from lightning.pytorch.loggers import WandbLogger, CSVLogger
 import wandb
 import scanpy as sc
 import simba_plus.load_data
@@ -122,6 +122,7 @@ def run(
     verbose: bool = False,
     negative_sampling_fold: int = 1,
     batch_negative: bool = True,
+    no_wandb: bool = False,
 ):
     """
     Train the model with the given parameters.
@@ -287,25 +288,32 @@ def run(
         rpvgae,
         early_stopping_steps=early_stopping_steps,
         run_id="",
+        use_wandb=True,
     ):
         # prepare wandb logger
         code_directory_path = os.path.dirname(os.path.abspath(__file__))
-        wandb_logger = WandbLogger(project=f"pyg_simba_{output_dir.replace('/', '_')}")
-        code_artifact = wandb.Artifact("my-python-code", type="code")
-        code_artifact.add_dir(code_directory_path)
-        wandb_logger.experiment.log_artifact(code_artifact)
-        wandb_logger.experiment.config.update(
-            {
-                "run_id": run_id,
-                "batch_size": batch_size,
-                "n_no_kl": n_no_kl,
-                "n_kl_warmup": n_kl_warmup,
-                "early_stopping_steps": early_stopping_steps,
-                "HSIC_loss": hsic_lam,
-                "negative_sampling_fold": negative_sampling_fold,
-                "edgetype_specific": edgetype_specific,
-            }
-        )
+
+        if use_wandb:
+            wandb_logger = WandbLogger(project=f"pyg_simba_{output_dir.replace('/', '_')}")
+            code_artifact = wandb.Artifact("my-python-code", type="code")
+            code_artifact.add_dir(code_directory_path)
+            wandb_logger.experiment.log_artifact(code_artifact)
+            wandb_logger.experiment.config.update(
+                {
+                    "run_id": run_id,
+                    "batch_size": batch_size,
+                    "n_no_kl": n_no_kl,
+                    "n_kl_warmup": n_kl_warmup,
+                    "early_stopping_steps": early_stopping_steps,
+                    "HSIC_loss": hsic_lam,
+                    "negative_sampling_fold": negative_sampling_fold,
+                    "edgetype_specific": edgetype_specific,
+                }
+            )
+            pl_logger = wandb_logger
+        else:
+            logger.info("W&B logging disabled; using CSV logger instead.")
+            pl_logger = CSVLogger(save_dir=checkpoint_dir, name="pl_logs")
 
         # prepare callbacks
         early_stopping_callback = MyEarlyStopping(
@@ -331,7 +339,7 @@ def run(
                 lrmonitor_callback,
                 # onexception_callback,
             ],
-            logger=wandb_logger,
+            logger=pl_logger,
             devices=1,
             default_root_dir=checkpoint_dir,
             num_sanity_val_steps=0,
@@ -368,6 +376,7 @@ def run(
     last_model_path = train(
         rpvgae,
         run_id=run_id,
+        use_wandb=not no_wandb,
     )
     torch.save(rpvgae.state_dict(), os.path.join(prefix, f"{run_id}.model"))
     save_files(
@@ -663,6 +672,11 @@ def add_argument(parser):
         "--verbose",
         action="store_true",
         help="If set, enables verbose logging",
+    )
+    parser.add_argument(
+        "--no-wandb",
+        action="store_true",
+        help="Disable Weights & Biases logging (recommended for CI/tests).",
     )
     return parser
 

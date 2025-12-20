@@ -69,6 +69,7 @@ def test_train():
         "--hidden-dim=3",
         "--output-dir",
         output_dir,
+        "--no-wandb",
     ]
 
     try:
@@ -125,6 +126,7 @@ def test_train_usebatch():
         "--max-epoch=1",
         "--output-dir",
         output_dir,
+        "--no-wandb",
     ]
 
     try:

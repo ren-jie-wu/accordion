@@ -13,4 +13,4 @@ def pytest_sessionfinish(session):
         """Clean up output directory after tests."""
         output_dir = f"{os.path.dirname(__file__)}/output/"
         if os.path.exists(output_dir):
-            shutil.rmtree(output_dir)
+            shutil.rmtree(output_dir, ignore_errors=True)
