@@ -14,6 +14,18 @@ import simba_plus.linking.unsupervised as peak_gene_link_unsupervised
 import simba_plus.linking.supervised_train as peak_gene_link_train
 import simba_plus.linking.supervised_predict as peak_gene_link_predict
 
+import torch
+from torch_geometric.data.storage import BaseStorage, NodeStorage, EdgeStorage
+from logging import getLogger
+from simba_plus.encoders import TransEncoder
+from simba_plus.model_prox import AuxParams, LightningProxModel
+from simba_plus.decoders import RelationalEdgeDistributionDecoder
+torch.serialization.add_safe_globals([
+    BaseStorage, NodeStorage, EdgeStorage, 
+    getLogger, 
+    TransEncoder, AuxParams, LightningProxModel, RelationalEdgeDistributionDecoder,
+])
+
 
 def main():
     if len(sys.argv) < 2:
