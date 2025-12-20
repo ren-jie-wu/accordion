@@ -421,11 +421,18 @@ def pretty_print(
                 output_string += f"   {'─' * (len(metric_name) + 3)}" + "\n"
 
                 # Basic statistics
-                output_string += f"   Mean:       {np.mean(array):.3f}" + "\n"
-                output_string += f"   Std:        {np.std(array):.3f}" + "\n"
-                output_string += f"   Min:        {np.min(array):.3f}" + "\n"
-                output_string += f"   Max:        {np.max(array):.3f}" + "\n"
-                output_string += f"   Median:     {np.median(array):.3f}" + "\n"
+                if len(array) > 0:
+                    output_string += f"   Mean:       {np.mean(array):.3f}" + "\n"
+                    output_string += f"   Std:        {np.std(array):.3f}" + "\n"
+                    output_string += f"   Min:        {np.min(array):.3f}" + "\n"
+                    output_string += f"   Max:        {np.max(array):.3f}" + "\n"
+                    output_string += f"   Median:     {np.median(array):.3f}" + "\n"
+                else:
+                    output_string += f"   Mean:       N/A" + "\n"
+                    output_string += f"   Std:        N/A" + "\n"
+                    output_string += f"   Min:        N/A" + "\n"
+                    output_string += f"   Max:        N/A" + "\n"
+                    output_string += f"   Median:     N/A" + "\n"
 
     output_string += "\n" + "=" * 80 + "\n"
     logger.info(output_string)
