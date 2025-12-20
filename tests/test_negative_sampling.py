@@ -12,7 +12,7 @@ from simba_plus.utils import get_edge_split_datamodule
 from simba_plus.model_prox import LightningProxModel
 from simba_plus.train import setup_logging
 
-DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".data")
+DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "output/test_negative_sampling/")
 shutil.rmtree(DATA_DIR, ignore_errors=True)
 os.makedirs(DATA_DIR, exist_ok=True)
 logger = setup_logging(DATA_DIR)

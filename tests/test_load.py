@@ -11,7 +11,8 @@ def test_simba_load_data_command():
     test_input_dir = os.path.join(os.path.dirname(__file__), "../data/input/")
     gene_adata = os.path.join(test_input_dir, "adata_CG_sub.h5ad")
     peak_adata = os.path.join(test_input_dir, "adata_CP_sub.h5ad")
-    output_file = os.path.join(test_input_dir, "hetdata.dat")
+    output_file = os.path.join(test_input_dir, "../../tests/output/data/hetdata.dat")
+    os.makedirs(os.path.dirname(output_file), exist_ok=True)
 
     # Run the command
     cmd = [
@@ -34,13 +35,14 @@ def test_simba_load_data_command():
 
 
 @pytest.mark.order(1)
-def test_simba_load_data_command():
+def test_simba_load_data_command_usebatch():
     """Test the simba+ load_data command line interface."""
 
     test_input_dir = os.path.join(os.path.dirname(__file__), "../data/input/")
     gene_adata = os.path.join(test_input_dir, "adata_CG_sub.h5ad")
     peak_adata = os.path.join(test_input_dir, "adata_CP_sub.h5ad")
-    output_file = os.path.join(test_input_dir, "hetdata_batched.dat")
+    output_file = os.path.join(test_input_dir, "../../tests/output/data/hetdata_batched.dat")
+    os.makedirs(os.path.dirname(output_file), exist_ok=True)
 
     # Run the command
     cmd = [

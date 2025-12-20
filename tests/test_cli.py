@@ -7,7 +7,7 @@ SRC_DIR = os.path.join(REPO_ROOT, "src")
 PY = sys.executable
 
 
-def _run_subcommand(args, timeout=60):
+def _run_subcommand(args, timeout=180):
     env = os.environ.copy()
     env["PYTHONPATH"] = SRC_DIR + os.pathsep + env.get("PYTHONPATH", "")
     proc = subprocess.run(

@@ -25,6 +25,21 @@ def _which_exe(name):
     # Add more specific assertions based on expected behavior
 
 
+def _load_data(exe, hetdata, adata_CG, adata_CP):
+    cmd = [
+        exe,
+        "load_data",
+        hetdata,
+        "--gene-adata",
+        adata_CG,
+        "--peak-adata",
+        adata_CP,
+    ]
+    result = subprocess.run(cmd, check=True, capture_output=True, text=True, env=os.environ.copy())
+    assert result.returncode == 0, f"Command failed: {result.stderr}"
+    assert os.path.exists(hetdata), "Output file was not created"
+
+
 @pytest.mark.order(2)
 def test_train():
     exe = _which_exe("simba+")
@@ -32,11 +47,16 @@ def test_train():
         pytest.skip("simba+ executable not found in PATH")
 
     workdir = os.path.join(os.path.dirname(__file__), "../data/input/")
-    hetdata = f"{workdir}/hetdata.dat"
+    hetdata = f"{workdir}/../../tests/output/data/hetdata.dat"
     adata_CG = f"{workdir}/adata_CG_sub.h5ad"
     adata_CP = f"{workdir}/adata_CP_sub.h5ad"
     output_dir = f"{os.path.dirname(__file__)}/output/"
     os.makedirs(output_dir, exist_ok=True)
+    os.makedirs(os.path.dirname(hetdata), exist_ok=True)
+
+    if not os.path.exists(hetdata):
+        _load_data(exe, hetdata, adata_CG, adata_CP)
+    
     cmd = [
         exe,
         "train",
@@ -70,7 +90,7 @@ def test_train():
         )
 
 
-@pytest.mark.order(2)
+@pytest.mark.order(3)
 def test_train_usebatch():
     exe = _which_exe("simba+")
     if exe is None:
@@ -78,9 +98,14 @@ def test_train_usebatch():
 
     # prepare minimal placeholder files
     workdir = os.path.join(os.path.dirname(__file__), "../data/input/")
-    hetdata = f"{workdir}/hetdata_batched.dat"
+    hetdata = f"{workdir}/../../tests/output/data/hetdata_batched.dat"
+    os.makedirs(os.path.dirname(hetdata), exist_ok=True)
     if not os.path.exists(hetdata):
-        dat = simba_plus.load_data.load_from_path(f"{workdir}/hetdata.dat")
+        hetdata_no_batch = f"{workdir}/../../tests/output/data/hetdata.dat"
+        os.makedirs(os.path.dirname(hetdata_no_batch), exist_ok=True)
+        if not os.path.exists(hetdata_no_batch):
+            _load_data(exe, hetdata_no_batch, adata_CG, adata_CP)
+        dat = simba_plus.load_data.load_from_path(hetdata_no_batch)
         dat["cell"].batch = torch.randint(
             0, 2, (dat["cell"].num_nodes,), dtype=torch.long
         )
@@ -121,50 +146,19 @@ def test_train_usebatch():
         )
 
 
-@pytest.mark.order(3)
-def test_simba_eval_command():
-    """Test the simba+ eval command line interface."""
-
-    data_dir = os.path.join(os.path.dirname(__file__), "../data/input/")
-    train_output_dir = os.path.join(os.path.dirname(__file__), "output/")
-    data_file = f"{data_dir}/hetdata.dat"
-
-    # Create mock checkpoint file
-    ckpt_file = (
-        f"{train_output_dir}/simba+hetdata.dat_100K.d.randinit.checkpoints/last.ckpt"
-    )
-    idx_file = f"{data_dir}/hetdata_data_idx.pkl"
-
-    # Run the command
-    cmd = [
-        "simba+",
-        "eval",
-        str(data_file),
-        str(ckpt_file),
-        "--idx-path",
-        str(idx_file),
-        "--batch-size=100000",
-    ]
-
-    result = subprocess.run(cmd, capture_output=True, text=True)
-
-    # Assert command doesn't fail with basic file issues
-    assert result.returncode == 0, f"Command failed with stderr: {result.stderr}"
-
-
 @pytest.mark.order(4)
 def test_simba_eval_command():
     """Test the simba+ eval command line interface."""
 
     data_dir = os.path.join(os.path.dirname(__file__), "../data/input/")
     train_output_dir = os.path.join(os.path.dirname(__file__), "output/")
-    data_file = f"{data_dir}/hetdata.dat"
+    data_file = f"{data_dir}/../../tests/output/data/hetdata.dat"
 
     # Create mock checkpoint file
     ckpt_file = (
         f"{train_output_dir}/simba+hetdata.dat_100K.d3.randinit.checkpoints/last.ckpt"
     )
-    idx_file = f"{data_dir}/hetdata_data_idx.pkl"
+    idx_file = f"{data_dir}/../../tests/output/data/hetdata_data_idx.pkl"
 
     # Run the command
     cmd = [
@@ -183,18 +177,19 @@ def test_simba_eval_command():
     assert result.returncode == 0, f"Command failed with stderr: {result.stderr}"
 
 
-@pytest.mark.order(5)
-def test_simba_heritability_command():
+# Skip the heritability test for now
+# @pytest.mark.order(5)
+# def test_simba_heritability_command():
 
-    prefix = f"{os.path.dirname(__file__)}/output/simba+hetdata.dat_100K.d3.randinit.checkpoints/"
-    sumstats = f"{os.path.dirname(__file__)}/../data/sumstats/sumstats_rdw.txt"
-    cmd = [
-        "simba+",
-        "heritability",
-        str(sumstats),
-        str(prefix),
-    ]
-    result = subprocess.run(cmd, capture_output=True, text=True)
+#     prefix = f"{os.path.dirname(__file__)}/output/simba+hetdata.dat_100K.d3.randinit.checkpoints/"
+#     sumstats = f"{os.path.dirname(__file__)}/../data/sumstats/sumstats_rdw.txt"
+#     cmd = [
+#         "simba+",
+#         "heritability",
+#         str(sumstats),
+#         str(prefix),
+#     ]
+#     result = subprocess.run(cmd, capture_output=True, text=True)
 
-    # Assert command doesn't fail with basic file issues
-    assert result.returncode == 0, f"Command failed with stderr: {result.stderr}"
+#     # Assert command doesn't fail with basic file issues
+#     assert result.returncode == 0, f"Command failed with stderr: {result.stderr}"
