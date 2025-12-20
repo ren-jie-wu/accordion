@@ -7,6 +7,7 @@ from datetime import datetime
 import argparse
 import warnings
 import pickle as pkl
+import math
 
 warnings.simplefilter(action="ignore", category=FutureWarning)
 import anndata as ad
@@ -130,8 +131,8 @@ def run(
         data_path (str): The path to the data file (hetdata.dat or similar).
         adata_CG (str): The path to the cell adata file. Only used to provide cell metadata and gene metadata.
         adata_CP (str): The path to the peak adata file. Only used to provide cell metadata (if not provided in adata_CG) and peak metadata.
-        batch_size (int): The batch size of edges for the DataLoader.
-        batch_negative (bool, default=True): If True, datamodule construction will not do negative sampling.
+        batch_size (int): The batch size of edges for the DataLoader. If batch_negative is True, this is the number of positive edges per batch.
+        batch_negative (bool, default=True): If True, datamodule construction will not do negative sampling; instead, negative sampling will be done in each training step and validation step.
         output_dir (str): The output directory.
         sumstats (str): The path to a TSV file with trait name and path to GWAS summary statistics file per line.
         sumstats_lam (float): The weight of the loss for sumstats residual.
@@ -150,8 +151,8 @@ def run(
         n_batch_sampling (int): Dummy parameter for now.
         n_no_kl (int): ... passed to LightningProxModel.
         n_kl_warmup (int): ... passed to LightningProxModel.
-        edgetype_specific (bool): ... passed to LightningProxModel.
-        nonneg (bool): ... passed to LightningProxModel.
+        edgetype_specific (bool): Whether to use different parameters for the same node type but different edge types. Passed to LightningProxModel.
+        nonneg (bool): Passed to LightningProxModel but not used for now.
         ldsc_res (pd.DataFrame): per-SNP LD score regression residuals from get_residual(). Used to promote peak loading explaining GWAS residual.
         
     Returns:
@@ -224,19 +225,11 @@ def run(
         logger=logger,
         device=device,
     )
-    n_batches = (
-        pldata.train_loader.dataset.total_length
-        # * (1 + negative_sampling_fold)
-        // batch_size
-        + 1
-    )
+
+    # n_batches and n_val_batches are actually not used in get_nll_scales()
+    n_batches = math.ceil(pldata.train_loader.dataset.total_length / batch_size)
     logger.info(f"@N_BATCHES:{n_batches}")
-    n_val_batches = (
-        pldata.val_loader.dataset.total_length
-        # * (1 + negative_sampling_fold)
-        // batch_size
-        + 1
-    )
+    n_val_batches = math.ceil(pldata.val_loader.dataset.total_length / batch_size)
     nll_scale, val_nll_scale = get_nll_scales(
         data=data,
         pldata=pldata,
@@ -247,6 +240,7 @@ def run(
         logger=logger,
     )
 
+    # For now I skip the HSIC part and thus have not checked it. #TODO
     if hsic_lam != 0:
         # cell_edge_types = []
         # for edge_type in edge_types:

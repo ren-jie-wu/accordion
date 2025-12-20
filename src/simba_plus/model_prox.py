@@ -28,13 +28,36 @@ from simba_plus._utils import (
 
 class AuxParams(nn.Module):
     def __init__(self, data: HeteroData, edgetype_specific: bool = True) -> None:
+        """
+        Prepare parameter dictionaries with batch correction for RNA-seq data
+        
+        Args:
+            data (HeteroData): The data object containing the graph data.
+            edgetype_specific (bool): Whether to use different parameters for different edge types.
+        
+        Notes:
+            An example keylist for a parameter dictionary when edgetype_specific is True is:
+            [
+                "cell__cell_expresses_gene",      # value shape: (num_cells,)
+                "cell__cell_has_accessible_peak", # value shape: (num_cells,)
+                "gene__cell_expresses_gene",      # value shape: (num_genes, num_batches) if use_batch else (num_genes,)
+                "peak__cell_has_accessible_peak"  # value shape: (num_peaks, num_batches) if use_batch else (num_peaks,)
+            ]
+            But for *_logstd_dict, there is only destination node type in the key.
+            [
+                "gene__cell_expresses_gene",
+                "peak__cell_has_accessible_peak"
+            ]
+        """
         super().__init__()
         # Batch correction for RNA-seq data
         self.bias_dict = nn.ParameterDict()
         self.logscale_dict = nn.ParameterDict()
         self.std_dict = nn.ParameterDict()
+
         self.use_batch = False
         self.edgetype_specific = edgetype_specific
+        # if there are more than one batch, turn on use_batch
         if (
             hasattr(data["cell"], "batch")
             and torch.unique(data["cell"].batch).size(0) > 1
@@ -45,6 +68,7 @@ class AuxParams(nn.Module):
         self.std_logstd_dict = nn.ParameterDict()
         for edge_type in data.edge_types:
             src, _, dst = edge_type
+            # if edgetype_specific is True, same node type but with different edge type will have different sets of parameters
             if edgetype_specific:
                 src_key = make_key(src, edge_type)
                 dst_key = make_key(dst, edge_type)
@@ -67,7 +91,9 @@ class AuxParams(nn.Module):
                 )
             )
 
+            # if use_batch, same dst node & edge type but with different batch will have different sets of parameters
             if self.use_batch:
+                # number of batches
                 n_batches = len(data["cell"].batch.unique())
                 self.logscale_dict[dst_key] = nn.Parameter(
                     torch.zeros(
@@ -307,7 +333,7 @@ class LightningProxModel(L.LightningModule):
         val_nll_scale: float = 1.0,
         learning_rate=1e-2,
         node_weights_dict=None,
-        nonneg=False,
+        nonneg=False, #TODO: not used
         reweight_rarecell: bool = False,
         reweight_rarecell_neighbors: Optional[int] = None,
         verbose: bool = False,
@@ -362,6 +388,7 @@ class LightningProxModel(L.LightningModule):
         self.validation_step_outputs = []
         self.aux_params = AuxParams(data, edgetype_specific=edgetype_specific)
         self.verbose = verbose
+        self.batch_negative = batch_negative
 
     def on_train_start(self):
         self.node_weights_dict = {
@@ -426,14 +453,14 @@ class LightningProxModel(L.LightningModule):
                 neg_edge_index_dict = {}
                 for edge_type in pos_edge_index_dict.keys():
                     src, _, dst = edge_type
+                    n_pos_edges = pos_edge_index_dict[edge_type].shape[1]
                     neg_edge_index = negative_sampling(
                         batch[edge_type].edge_index,
                         num_nodes=(
                             batch[src].num_nodes,
                             batch[dst].num_nodes,
                         ),
-                        num_neg_samples=len(pos_edge_index_dict[edge_type])
-                        * self.num_neg_samples_fold,
+                        num_neg_samples=n_pos_edges * self.num_neg_samples_fold,
                     )
                     neg_edge_index_dict[edge_type] = neg_edge_index
             neg_dist_dict: Dict[EdgeType, Distribution] = self.decoder(
@@ -451,7 +478,7 @@ class LightningProxModel(L.LightningModule):
             loss_dict[edge_type] = pos_loss
             if neg_sample:
                 neg_dist = neg_dist_dict[edge_type]
-                neg_edge_weights = torch.zeros(
+                neg_edge_weights = torch.zeros( #TODO: check this: is it okay to use zeros as negative edge weights?
                     neg_dist.event_shape, device=pos_edge_weights.device
                 )
                 neg_loss = -neg_dist.log_prob(neg_edge_weights).sum()
@@ -596,7 +623,7 @@ class LightningProxModel(L.LightningModule):
             pos_edge_weight_dict=batch.edge_attr_dict,
             edgetype_loss_weight_dict=self.edgetype_loss_weight_dict,
             # batch_alledges=batch_alledges,
-            neg_sample=True,
+            neg_sample=self.batch_negative
         )
         t1 = time.time()
         self.log("time:nll_loss", t1 - t0, on_step=True, on_epoch=False)
@@ -818,7 +845,7 @@ class LightningProxModel(L.LightningModule):
             batch.edge_attr_dict,
             edgetype_loss_weight_dict=self.edgetype_loss_weight_dict,
             # batch_alledges=batch_alledges,
-            neg_sample=True,
+            neg_sample=self.batch_negative
         )
 
         if self.current_epoch >= self.n_no_kl:

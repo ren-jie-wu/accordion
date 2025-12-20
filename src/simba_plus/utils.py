@@ -220,24 +220,17 @@ def get_edge_split_data(data, data_path, edge_types, negative_sampling_fold, log
             train_size = int(num_edges * 0.96)
             val_size = int(num_edges * 0.02)
             selected_indices = list(selected_indices)
-            train_index_dict["__".join(edge_type)] = torch.tensor(
-                # selected_indices
-                # +
-                remaining_indices[: train_size - len(selected_indices)],
-                dtype=torch.long,
-            )
-            val_index_dict["__".join(edge_type)] = torch.tensor(
-                remaining_indices[
-                    (train_size - len(selected_indices)) : (
-                        train_size - len(selected_indices) + val_size
-                    )
-                ],
-                dtype=torch.long,
-            )
-            test_index_dict["__".join(edge_type)] = torch.tensor(
-                remaining_indices[(train_size - len(selected_indices) + val_size) :],
-                dtype=torch.long,
-            )
+
+            # refactor this to avoid user warning
+            train_index_dict["__".join(edge_type)] = remaining_indices[
+                : train_size - len(selected_indices)
+            ].detach().clone().to(dtype=torch.long)
+            val_index_dict["__".join(edge_type)] = remaining_indices[
+                (train_size - len(selected_indices)) : (train_size - len(selected_indices) + val_size)
+            ].detach().clone().to(dtype=torch.long)
+            test_index_dict["__".join(edge_type)] = remaining_indices[
+                (train_size - len(selected_indices) + val_size) :
+            ].detach().clone().to(dtype=torch.long)
         logger.info(f"Saving data indices to {data_idx_path}...")
         idx_dict = {
             "train": train_index_dict,
@@ -325,8 +318,10 @@ def get_edge_split_datamodule(
     # resample before dataloader creation in case the dataloader only sees 
     # the length of the dataset as positive edge number
     if negative_sampling_fold > 0:
-        train_data.sample_negative()
-        val_data.sample_negative()
+        if len(train_data) > 0:
+            train_data.sample_negative()
+        if len(val_data) > 0:
+            val_data.sample_negative()
 
     train_loader, val_loader = get_dataloader(
         train_data=train_data,
