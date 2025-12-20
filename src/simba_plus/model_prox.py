@@ -638,9 +638,9 @@ class LightningProxModel(L.LightningModule):
             )
             # aux_kl_div_loss = self.aux_params.kl_div_loss(batch, self.node_weights_dict)
             t1 = time.time()
-            kl_scale = min(self.current_epoch + 1, self.n_kl_warmup - self.n_no_kl) / (
+            kl_scale = (min(self.current_epoch + 1, self.n_kl_warmup) - self.n_no_kl) / (
                 self.n_kl_warmup - self.n_no_kl
-            )
+            ) if self.n_kl_warmup - self.n_no_kl > 0 else 1.0
             batch_kl_div_loss *= kl_scale
 
         else:
@@ -856,6 +856,10 @@ class LightningProxModel(L.LightningModule):
                 batch.n_id_dict,
                 node_weights_dict=self.node_weights_dict,
             )
+            kl_scale = (min(self.current_epoch + 1, self.n_kl_warmup) - self.n_no_kl) / (
+                self.n_kl_warmup - self.n_no_kl
+            ) if self.n_kl_warmup - self.n_no_kl > 0 else 1.0
+            batch_kl_div_loss *= kl_scale
         else:
             batch_kl_div_loss = 0.0
         self.log(
@@ -963,6 +967,7 @@ class LightningProxModel(L.LightningModule):
         aux_params = list(self.aux_params.parameters())
 
         optimizer = torch.optim.Adam(
+            # currently there are only encoder and aux parameters, no decoder parameters
             [
                 {"params": encoder_params, "lr": self.learning_rate},
                 {
