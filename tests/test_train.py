@@ -29,6 +29,7 @@ def _load_data(exe, hetdata, adata_CG, adata_CP):
     cmd = [
         exe,
         "load_data",
+        "--out-path",
         hetdata,
         "--gene-adata",
         adata_CG,

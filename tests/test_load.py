@@ -22,6 +22,7 @@ def test_simba_load_data_command():
         gene_adata,
         "--peak-adata",
         peak_adata,
+        "--out-path",
         output_file,
     ]
 
@@ -52,6 +53,7 @@ def test_simba_load_data_command_usebatch():
         gene_adata,
         "--peak-adata",
         peak_adata,
+        "--out-path",
         output_file,
         "--batch-col",
         "batch",

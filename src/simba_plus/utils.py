@@ -607,3 +607,13 @@ def is_integer_valued(X, tol=1e-8, max_check=100_000):
         data = data[idx]
     
     return np.allclose(data, np.round(data), atol=tol)
+
+
+def _to_coo(X):
+    if sp.issparse(X):
+        return X.tocoo()
+    # dense
+    r, c = np.nonzero(X)
+    class _COO:
+        row, col, data = r, c, X[r, c]
+    return _COO()

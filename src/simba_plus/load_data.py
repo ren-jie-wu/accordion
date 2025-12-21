@@ -6,8 +6,10 @@ from torch_geometric.data import HeteroData
 import warnings
 warnings.simplefilter(action="ignore", category=FutureWarning)
 import anndata as ad
-from simba_plus.utils import _make_tensor, is_integer_valued
+from simba_plus.utils import _make_tensor, is_integer_valued, _to_coo
 import argparse
+from typing import List, Optional
+import os
 
 def validate_input(adata_CG, adata_CP):
     """
@@ -125,6 +127,136 @@ def make_sc_HetData(
     return data
 
 
+def _align_gene_names(genes_list: List[List[str]]): #TODO
+    """
+    Align the gene names of the multiple RNA-seq datasets in case they use different naming systems.
+    """
+    pass
+
+
+def _check_no_duplicates(*genes_list: List[List[str]], name="RNA"):
+    """
+    Check if there are any duplicate gene names in the multiple RNA-seq datasets.
+    """
+    for i, genes in enumerate(genes_list):
+        if len(genes) != len(set(genes)):
+            raise ValueError(f"Duplicate feature names found in the {name} datasets {i} (index from 0)")
+    return True
+
+def make_sc_HetData_multi_rna(
+    adata_CG_list: Optional[List[Optional[ad.AnnData]]] = None,
+    cell_cat_cov_list: Optional[List[Optional[str]]] = None,
+    n_dims: int = 50,
+):
+    if adata_CG_list is None or \
+        len(adata_CG_list) == 0 or \
+        all(adata is None for adata in adata_CG_list):
+        raise ValueError("No data provided for edge construction")
+    
+    if cell_cat_cov_list is None or len(cell_cat_cov_list) == 0:
+        cell_cat_cov_list = [None] * len(adata_CG_list)
+    if len(cell_cat_cov_list) == 1: # broadcast
+        cell_cat_cov_list = cell_cat_cov_list * len(adata_CG_list)
+    assert len(adata_CG_list) == len(cell_cat_cov_list), "The number of RNA-seq datasets and cell batch covariates must be the same"
+    
+    data = HeteroData()
+
+    ## prepare genes
+    # taking care of None in adata_CG_list because we may allow providing only one of RNA and ATAC in the future
+    genes_list = [list(map(str, adata.var_names)) if adata is not None else [] for adata in adata_CG_list]
+    _check_no_duplicates(*genes_list)
+    _align_gene_names(genes_list)
+    union_genes = sorted(set().union(*[set(genes) for genes in genes_list if len(genes) > 0]))
+    gene_to_id = {gene: i for i, gene in enumerate(union_genes)} # common gene names for future gene alignment use
+    
+    g_list = [adata.n_vars if adata is not None else 0 for adata in adata_CG_list]
+    n_list = [adata.n_obs if adata is not None else 0 for adata in adata_CG_list]
+
+    if sum(g_list) == 0 or sum(n_list) == 0:
+        raise ValueError("No genes or cells found in the RNA-seq datasets")
+    
+    ## assign x, batch, sample, gene_id
+    ## size_factor is IGNORED since it is never used in current implementation
+
+    data["cell"].x = torch.zeros((sum(n_list), n_dims), dtype=torch.float)
+    data["gene"].x = torch.zeros((sum(g_list), n_dims), dtype=torch.float)
+
+    if any(cell_cat_cov is not None for cell_cat_cov in cell_cat_cov_list):
+        batch_all = torch.zeros((sum(n_list),), dtype=torch.long)
+        offset = 0
+        for i, (cell_cat_cov, adata) in enumerate(zip(cell_cat_cov_list, adata_CG_list)):
+            if adata is None:
+                continue
+            idx_start, idx_end = sum(n_list[:i]), sum(n_list[:i+1])
+            if cell_cat_cov is not None and cell_cat_cov in adata.obs.columns:
+                codes = adata.obs[cell_cat_cov].astype("category").cat.codes.to_numpy().astype(np.int64)
+                batch_all[idx_start:idx_end] = torch.from_numpy(codes) + offset
+                offset += int(codes.max()) + 1 if codes.size > 0 else 1
+            else:
+                batch_all[idx_start:idx_end] = offset
+                offset += 1
+        if batch_all.unique().numel() > 1:
+            data["cell"].batch = batch_all
+
+    data["cell"].sample = torch.cat(
+        [torch.full((n,), i, dtype=torch.long) for i, n in enumerate(n_list)],
+        dim=0,
+    )
+    data["gene"].sample = torch.cat(
+        [torch.full((g,), i, dtype=torch.long) for i, g in enumerate(g_list)],
+        dim=0,
+    )
+
+    data["gene"].gene_id = torch.cat([
+        torch.tensor(
+            [gene_to_id[gene] for gene in genes], dtype=torch.long
+        ) for genes in genes_list
+    ], dim=0)
+
+    ## build edges
+
+    edge_type = ("cell", "expresses", "gene")
+
+    coo_list = [_to_coo(adata.X) if adata is not None else None for adata in adata_CG_list]
+    _get_edge_index = lambda coo, cell_off, gene_off: torch.vstack(
+        [
+            torch.from_numpy(coo.row.astype(np.int64)) + cell_off,
+            torch.from_numpy(coo.col.astype(np.int64)) + gene_off,
+        ]
+    )
+
+    if len(coo_list) == 0 or all(coo is None for coo in coo_list):
+        edge_index = torch.empty((2,0), dtype=torch.long)
+        edge_attr = torch.empty((0,), dtype=torch.float32)
+    else:
+        edge_index = torch.hstack(
+            [
+                _get_edge_index(coo, cell_off=sum(n_list[:i]), gene_off=sum(g_list[:i])) 
+                    for i, coo in enumerate(coo_list) if coo is not None
+            ]
+        ).long()
+        edge_attr = torch.cat(
+            [
+                torch.from_numpy(np.asarray(coo.data).astype(np.float32)).view(-1)
+                    for coo in coo_list if coo is not None
+            ], dim=0,
+        )
+
+    is_integer_list = [is_integer_valued(adata.X) for adata in adata_CG_list if adata is not None]
+    if all(is_integer_list):
+        edge_dist = "NegativeBinomial"
+    elif any(is_integer_list): # mixed integer and non-integer data
+        print("[WARNING] Mixed integer and non-integer data detected. Edge distribution will be set to Normal.")
+        edge_dist = "Normal"
+    else:
+        edge_dist = "Normal"
+
+    data[edge_type].edge_index = edge_index
+    data[edge_type].edge_attr = edge_attr
+    data[edge_type].edge_dist = edge_dist
+
+    return data
+
 def load_from_path(path: str, device="cpu") -> HeteroData:
     data = torch.load(path, map_location=device, weights_only=False)
     data.generate_ids()
@@ -137,7 +269,8 @@ def add_argument(parser):
     parser.add_argument(
         "--gene-adata",
         type=str,
-        help="Path to the cell by gene AnnData file (e.g., .h5ad).",
+        nargs="+", # allow 1 or more gene adatas
+        help="Path to the cell by gene AnnData file(s) (e.g., .h5ad).",
     )
     parser.add_argument(
         "--peak-adata",
@@ -147,22 +280,48 @@ def add_argument(parser):
     parser.add_argument(
         "--batch-col",
         type=str,
-        help="Batch column in AnnData.obs of gene AnnData. If gene AnnData is not provided, peak AnnData will be used.",
+        nargs="+", # allow 1 or more batch columns for multiple RNA-seq datasets
+        help="Batch column(s) in AnnData.obs of gene AnnData(s). "\
+             "Should match the number of gene AnnData(s), or be a single value to broadcast to all gene AnnData(s). "\
+             "If gene AnnData is not provided, peak AnnData will be used.",
     )
     parser.add_argument(
-        "out_path",
+        "--out-path",
         type=str,
-        help="Path to the saved HeteroData object (e.g., .pt file).",
+        required=True,
+        help="Path to the saved HeteroData object (e.g., .dat file).",
     )
     return parser
 
 
 def main(args):
-    dat = make_sc_HetData(
-        adata_CG=ad.read_h5ad(args.gene_adata) if args.gene_adata else None,
-        adata_CP=ad.read_h5ad(args.peak_adata) if args.peak_adata else None,
-        cell_cat_cov=args.batch_col,
+    gene_paths = args.gene_adata
+    if gene_paths is None or len(gene_paths) == 0:
+        print("No gene adatas provided.")
+        gene_adatas = None
+    else:
+        gene_adatas = []
+        for gene_path in gene_paths:
+            try:
+                adata = ad.read_h5ad(gene_path)
+                gene_adatas.append(adata)
+            except Exception as e:
+                print(f"Skipping {gene_path} due to error: {e}")
+                gene_adatas.append(None)
+    
+    dat = make_sc_HetData_multi_rna(
+        adata_CG_list=gene_adatas,
+        cell_cat_cov_list=args.batch_col,
     )
+    
+    # dat = make_sc_HetData(
+    #     adata_CG=ad.read_h5ad(args.gene_adata) if args.gene_adata else None,
+    #     adata_CP=ad.read_h5ad(args.peak_adata) if args.peak_adata else None,
+    #     cell_cat_cov=args.batch_col,
+    # )
+    out_dir = os.path.dirname(args.out_path)
+    if not os.path.exists(out_dir):
+        os.makedirs(out_dir, exist_ok=True)
     torch.save(dat, args.out_path)
 
 
