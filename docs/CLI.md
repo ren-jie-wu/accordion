@@ -3,25 +3,28 @@ Run `python -m simba_plus.simba_plus <subcommand> -h` for usage examples.
 ## simba+ `load_data` ... 
 
 ```
-usage: simba+ load_data [-h] [--gene-adata GENE_ADATA]
-                        [--peak-adata PEAK_ADATA] [--batch-col BATCH_COL]
-                        out_path
+usage: simba+ load_data [-h] [--gene-adata GENE_ADATA [GENE_ADATA ...]]
+                        [--peak-adata PEAK_ADATA]
+                        [--batch-col BATCH_COL [BATCH_COL ...]]
+                        --out-path OUT_PATH
 
 Load a HeteroData object from a given path and move it to the specified
 device.
 
-positional arguments:
-  out_path              Path to the saved HeteroData object (e.g., .pt file).
-
 options:
   -h, --help            show this help message and exit
-  --gene-adata GENE_ADATA
-                        Path to the cell by gene AnnData file (e.g., .h5ad).
+  --gene-adata GENE_ADATA [GENE_ADATA ...]
+                        Path to the cell by gene AnnData file(s) (e.g.,
+                        .h5ad).
   --peak-adata PEAK_ADATA
                         Path to the cell by gene AnnData file (e.g., .h5ad).
-  --batch-col BATCH_COL
-                        Batch column in AnnData.obs of gene AnnData. If gene
-                        AnnData is not provided, peak AnnData will be used.
+  --batch-col BATCH_COL [BATCH_COL ...]
+                        Batch column(s) in AnnData.obs of gene AnnData(s).
+                        Should match the number of gene AnnData(s), or be a
+                        single value to broadcast to all gene AnnData(s). If
+                        gene AnnData is not provided, peak AnnData will be
+                        used.
+  --out-path OUT_PATH   Path to the saved HeteroData object (e.g., .dat file).
 ```
 
 ## simba+ `train` ... 
