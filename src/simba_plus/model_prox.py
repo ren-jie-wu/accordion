@@ -648,9 +648,9 @@ class LightningProxModel(L.LightningModule):
             )
             # aux_kl_div_loss = self.aux_params.kl_div_loss(batch, self.node_weights_dict)
             t1 = time.time()
-            kl_scale = (min(self.current_epoch + 1, self.n_kl_warmup) - self.n_no_kl) / (
-                self.n_kl_warmup - self.n_no_kl
-            ) if self.n_kl_warmup - self.n_no_kl > 0 else 1.0
+            kl_scale = min(self.current_epoch + 1 - self.n_no_kl, self.n_kl_warmup) / (
+                self.n_kl_warmup
+            ) if self.n_kl_warmup > 0 else 1.0
             batch_kl_div_loss *= kl_scale
 
         else:
@@ -866,9 +866,9 @@ class LightningProxModel(L.LightningModule):
                 batch.n_id_dict,
                 node_weights_dict=self.node_weights_dict,
             )
-            kl_scale = (min(self.current_epoch + 1, self.n_kl_warmup) - self.n_no_kl) / (
-                self.n_kl_warmup - self.n_no_kl
-            ) if self.n_kl_warmup - self.n_no_kl > 0 else 1.0
+            kl_scale = min(self.current_epoch + 1 - self.n_no_kl, self.n_kl_warmup) / (
+                self.n_kl_warmup
+            ) if self.n_kl_warmup > 0 else 1.0
             batch_kl_div_loss *= kl_scale
         else:
             batch_kl_div_loss = 0.0
@@ -903,7 +903,7 @@ class LightningProxModel(L.LightningModule):
         self.log(
             "val_nll_loss_monitored",
             batch_nll_loss
-            + (torch.inf if self.current_epoch < self.n_kl_warmup * 2 else 0),
+            + (torch.inf if self.current_epoch < self.n_kl_warmup + self.n_no_kl else 0),
             batch_size=sum([v.shape[1] for v in batch.edge_index_dict.values()]),
             on_step=False,
             on_epoch=True,
