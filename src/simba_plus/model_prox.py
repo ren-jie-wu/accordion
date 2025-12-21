@@ -24,6 +24,7 @@ from simba_plus._utils import (
     make_key,
     update_lr,
 )
+from simba_plus.negative_sampling import negative_sampling_same_sample_bipartite
 
 
 class AuxParams(nn.Module):
@@ -453,15 +454,24 @@ class LightningProxModel(L.LightningModule):
                 neg_edge_index_dict = {}
                 for edge_type in pos_edge_index_dict.keys():
                     src, _, dst = edge_type
-                    n_pos_edges = pos_edge_index_dict[edge_type].shape[1]
-                    neg_edge_index = negative_sampling(
-                        batch[edge_type].edge_index,
-                        num_nodes=(
-                            batch[src].num_nodes,
-                            batch[dst].num_nodes,
-                        ),
-                        num_neg_samples=n_pos_edges * self.num_neg_samples_fold,
-                    )
+                    if hasattr(batch[src], "sample") and hasattr(batch[dst], "sample"):
+                        neg_edge_index = negative_sampling_same_sample_bipartite(
+                            pos_edge_index_dict[edge_type],
+                            src_sample=batch[src].sample,
+                            dst_sample=batch[dst].sample,
+                            num_neg_samples_fold=self.num_neg_samples_fold,
+                            method="sparse",
+                        )
+                    else:
+                        n_pos_edges = pos_edge_index_dict[edge_type].shape[1]
+                        neg_edge_index = negative_sampling(
+                            batch[edge_type].edge_index,
+                            num_nodes=(
+                                batch[src].num_nodes,
+                                batch[dst].num_nodes,
+                            ),
+                            num_neg_samples=n_pos_edges * self.num_neg_samples_fold,
+                        )
                     neg_edge_index_dict[edge_type] = neg_edge_index
             neg_dist_dict: Dict[EdgeType, Distribution] = self.decoder(
                 batch,

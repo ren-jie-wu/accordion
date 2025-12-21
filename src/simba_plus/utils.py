@@ -482,7 +482,15 @@ def get_nll_scales(
     """
     n_dense_edges = 0
     for src_nodetype, _, dst_nodetype in edge_types:
-        n_dense_edges += data[src_nodetype].num_nodes * data[dst_nodetype].num_nodes
+        if hasattr(data[src_nodetype], "sample") and hasattr(data[dst_nodetype], "sample"):
+            src_sample = data[src_nodetype].sample
+            dst_sample = data[dst_nodetype].sample
+            for s in torch.unique(src_sample).tolist():
+                n_src = int((src_sample == s).sum().item())
+                n_dst = int((dst_sample == s).sum().item())
+                n_dense_edges += n_src * n_dst
+        else:
+            n_dense_edges += data[src_nodetype].num_nodes * data[dst_nodetype].num_nodes
     train_data = pldata.train_loader.dataset
     val_data = pldata.val_loader.dataset
     n_edges = train_data.total_length

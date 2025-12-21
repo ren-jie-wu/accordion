@@ -9,6 +9,8 @@ from copy import copy
 import pickle as pkl
 import time
 
+from simba_plus.negative_sampling import negative_sampling_same_sample_bipartite
+
 
 class CustomIndexDataset(Dataset):
     def __init__(
@@ -122,16 +124,25 @@ class CustomNSMultiIndexDataset(Dataset):
             self.edge_index_dict = {}
             for edge_type in self.edge_types:
                 src, _, dst = edge_type
-                neg_edge_index = torch_geometric.utils.negative_sampling(
-                    self.data[edge_type].edge_index,
-                    num_nodes=(
-                        self.data[src].num_nodes,
-                        self.data[dst].num_nodes,
-                    ),
-                    num_neg_samples=len(self.pos_idx_dict[edge_type])
-                    * self.negative_sampling_fold,
-                    method="dense",
-                ).to(self.data[edge_type].edge_index.device)
+                if hasattr(self.data[src], "sample") and hasattr(self.data[dst], "sample"):
+                    neg_edge_index = negative_sampling_same_sample_bipartite(
+                        self.data[edge_type].edge_index,
+                        src_sample=self.data[src].sample,
+                        dst_sample=self.data[dst].sample,
+                        num_neg_samples_fold=self.negative_sampling_fold,
+                        method="sparse",
+                    )
+                else:
+                    neg_edge_index = torch_geometric.utils.negative_sampling(
+                        self.data[edge_type].edge_index,
+                        num_nodes=(
+                            self.data[src].num_nodes,
+                            self.data[dst].num_nodes,
+                        ),
+                        num_neg_samples=len(self.pos_idx_dict[edge_type])
+                        * self.negative_sampling_fold,
+                        method="sparse",
+                    ).to(self.data[edge_type].edge_index.device)
                 self.full_data[edge_type].edge_index = torch.cat(
                     [self.data[edge_type].edge_index, neg_edge_index], dim=1
                 )
