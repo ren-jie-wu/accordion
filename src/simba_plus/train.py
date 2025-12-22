@@ -760,7 +760,7 @@ def add_argument(parser):
         help="Regularization parameter for Optimal Transportation loss",
     )
     parser.add_argument(
-        "--ot-iters",
+        "--ot-iter",
         type=int,
         default=50,
         help="Number of iterations for Optimal Transportation loss",
