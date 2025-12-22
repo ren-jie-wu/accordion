@@ -312,7 +312,6 @@ def main(args):
     dat = make_sc_HetData_multi_rna(
         adata_CG_list=gene_adatas,
         cell_cat_cov_list=args.batch_col,
-        n_dims=1, # since .x is deleted in train.py, this can be arbitrary
     )
     
     # dat = make_sc_HetData(

@@ -222,8 +222,7 @@ def run(
             checkpoint_suffix=checkpoint_suffix,
             logger=logger,
         )
-        last_model_path = f"{checkpoint_dir}/last{checkpoint_suffix}.ckpt"
-        return last_model_path, logger
+        return
 
     edge_types = data.edge_types
     if "peak" in data.node_types and "gene" in data.node_types:
