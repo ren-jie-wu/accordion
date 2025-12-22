@@ -123,6 +123,16 @@ def run(
     negative_sampling_fold: int = 1,
     batch_negative: bool = True,
     no_wandb: bool = False,
+
+    lambda_gene_align: float = 0.0,
+    gene_align_n_no: int = 0,
+    gene_align_n_warmup: int = 10,
+    lambda_ot: float = 0.0,
+    ot_n_no: int = 15,
+    ot_n_warmup: int = 30,
+    ot_k: int = 256,
+    ot_eps: float = 0.05,
+    ot_iter: int = 50,
 ):
     """
     Train the model with the given parameters.
@@ -156,6 +166,17 @@ def run(
         nonneg (bool): Passed to LightningProxModel but not used for now.
         ldsc_res (pd.DataFrame): per-SNP LD score regression residuals from get_residual(). Used to promote peak loading explaining GWAS residual.
         
+        # multi-align related parameters
+        lambda_gene_align (float): Weight of the gene alignment loss.
+        gene_align_n_no (int): Number of epochs to wait before starting gene alignment.
+        gene_align_n_warmup (int): Number of epochs for gene alignment warmup.
+        lambda_ot (float): Weight of the Optimal Transportation loss (among cells).
+        ot_n_no (int): Number of epochs to wait before starting Optimal Transportation loss.
+        ot_n_warmup (int): Number of epochs for Optimal Transportation loss warmup.
+        ot_k (int): Number of cells to sample for Optimal Transportation loss.
+        ot_eps (float): Epsilon for Optimal Transportation loss.
+        ot_iter (int): Number of iterations for Optimal Transportation loss.
+
     Returns:
         None
     """
@@ -282,6 +303,16 @@ def run(
         verbose=verbose,
         num_neg_samples_fold=negative_sampling_fold,
         batch_negative=batch_negative,
+
+        lambda_gene_align=lambda_gene_align,
+        gene_align_n_no=gene_align_n_no,
+        gene_align_n_warmup=gene_align_n_warmup,
+        lambda_ot=lambda_ot,
+        ot_n_no=ot_n_no,
+        ot_n_warmup=ot_n_warmup,
+        ot_k=ot_k,
+        ot_eps=ot_eps,
+        ot_iter=ot_iter,
     ).to(device)
 
     def train(
@@ -677,6 +708,62 @@ def add_argument(parser):
         "--no-wandb",
         action="store_true",
         help="Disable Weights & Biases logging (recommended for CI/tests).",
+    )
+
+    # multi-align related parameters
+    parser.add_argument(
+        "--lambda-gene-align",
+        type=float,
+        default=0.0,
+        help="Weight of the gene alignment loss",
+    )
+    parser.add_argument(
+        "--gene-align-n-no",
+        type=int,
+        default=0,
+        help="Number of epochs to wait before starting gene alignment",
+    )
+    parser.add_argument(
+        "--gene-align-n-warmup",
+        type=int,
+        default=10,
+        help="Number of epochs for gene alignment warmup",
+    )
+    parser.add_argument(
+        "--lambda-ot",
+        type=float,
+        default=0.0,
+        help="Weight of the Optimal Transportation loss (among cells)",
+    )
+    parser.add_argument(
+        "--ot-n-no",
+        type=int,
+        default=15,
+        help="Number of epochs to wait before starting Optimal Transportation loss",
+    )
+    parser.add_argument(
+        "--ot-n-warmup",
+        type=int,
+        default=30,
+        help="Number of epochs for Optimal Transportation loss warmup",
+    )
+    parser.add_argument(
+        "--ot-k",
+        type=int,
+        default=256,
+        help="Subsample size for Optimal Transportation loss",
+    )
+    parser.add_argument(
+        "--ot-eps",
+        type=float,
+        default=0.05,
+        help="Regularization parameter for Optimal Transportation loss",
+    )
+    parser.add_argument(
+        "--ot-iters",
+        type=int,
+        default=50,
+        help="Number of iterations for Optimal Transportation loss",
     )
     return parser
 

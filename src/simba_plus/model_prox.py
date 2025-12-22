@@ -25,6 +25,7 @@ from simba_plus._utils import (
     update_lr,
 )
 from simba_plus.negative_sampling import negative_sampling_same_sample_bipartite
+from simba_plus.loss.gene_alignment import TwoSampleGenePairs, build_two_sample_gene_pairs, gene_alignment_msd_loss
 
 
 class AuxParams(nn.Module):
@@ -338,7 +339,17 @@ class LightningProxModel(L.LightningModule):
         reweight_rarecell: bool = False,
         reweight_rarecell_neighbors: Optional[int] = None,
         verbose: bool = False,
-        batch_negative: bool = True,
+        batch_negative: bool = False, # make the default same as in the CLI
+
+        lambda_gene_align: float = 0.0,
+        gene_align_n_no: int = 0,
+        gene_align_n_warmup: int = 10,
+        lambda_ot: float = 0.0,
+        ot_n_no: int = 15,
+        ot_n_warmup: int = 30,
+        ot_k: int = 256,
+        ot_eps: float = 0.05,
+        ot_iter: int = 50,
     ):
         super().__init__()
         self.save_hyperparameters()
@@ -390,6 +401,36 @@ class LightningProxModel(L.LightningModule):
         self.aux_params = AuxParams(data, edgetype_specific=edgetype_specific)
         self.verbose = verbose
         self.batch_negative = batch_negative
+
+        self.lambda_gene_align = lambda_gene_align
+        self.gene_align_n_no = gene_align_n_no
+        self.gene_align_n_warmup = gene_align_n_warmup
+        self.lambda_ot = lambda_ot
+        self.ot_n_no = ot_n_no
+        self.ot_n_warmup = ot_n_warmup
+        self.ot_k = ot_k
+        self.ot_eps = ot_eps
+        self.ot_iter = ot_iter
+
+        self._register_gene_pairs()
+    
+    def _register_gene_pairs(self):
+        self._gene_pairs: TwoSampleGenePairs | None = None
+        if self.lambda_gene_align > 0:
+            if not (hasattr(self.data["gene"], "sample") and hasattr(self.data["gene"], "gene_id")):
+                raise ValueError(
+                    "lambda_gene_align > 0 requires data['gene'].sample and data['gene'].gene_id "
+                    "(constructed in make_sc_HetData_multi_rna)."
+                )
+            
+            pairs = build_two_sample_gene_pairs(
+                gene_sample=self.data["gene"].sample,
+                gene_id=self.data["gene"].gene_id,
+            )
+            
+            self.register_buffer("gene_align_idx0", pairs.idx0, persistent=True)
+            self.register_buffer("gene_align_idx1", pairs.idx1, persistent=True)
+            self._gene_pairs = TwoSampleGenePairs(idx0=self.gene_align_idx0, idx1=self.gene_align_idx1)
 
     def on_train_start(self):
         self.node_weights_dict = {
@@ -617,6 +658,14 @@ class LightningProxModel(L.LightningModule):
             l += nll * edgetype_weight
         return l, neg_edge_index_dict, metric_dict
 
+    def gene_alignment_loss(self) -> torch.Tensor:
+        if self.lambda_gene_align <= 0 or self._gene_pairs is None:
+            return torch.tensor(0.0)
+        
+        gene_mu = self.encoder.__mu_dict__["gene"] # (n_genes, n_latent_dims)
+        pairs = self._gene_pairs
+        return gene_alignment_msd_loss(gene_mu, pairs)
+
     def training_step(self, batch, batch_idx):
         self.train()
         # Ensure model is in training mode
@@ -648,11 +697,8 @@ class LightningProxModel(L.LightningModule):
             )
             # aux_kl_div_loss = self.aux_params.kl_div_loss(batch, self.node_weights_dict)
             t1 = time.time()
-            kl_scale = min(self.current_epoch + 1 - self.n_no_kl, self.n_kl_warmup) / (
-                self.n_kl_warmup
-            ) if self.n_kl_warmup > 0 else 1.0
+            kl_scale = self._linear_warmup_scale(self.n_no_kl, self.n_kl_warmup)
             batch_kl_div_loss *= kl_scale
-
         else:
             batch_kl_div_loss = 0.0
         if self.herit_loss is not None:
@@ -705,12 +751,31 @@ class LightningProxModel(L.LightningModule):
         #     on_step=True,
         #     on_epoch=True,
         # )
+        
+        gene_align_loss = self.gene_alignment_loss()
+        gene_align_scale = self._linear_warmup_scale(self.gene_align_n_no, self.gene_align_n_warmup)
+        self.log(
+            "train_gene_align_loss",
+            gene_align_loss,
+            batch_size=sum([v.shape[1] for v in batch.edge_index_dict.values()]),
+            on_step=True,
+            on_epoch=True,
+        )
+        self.log(
+            "train_gene_align_loss_weighted",
+            self.lambda_gene_align * gene_align_scale * gene_align_loss,
+            batch_size=sum([v.shape[1] for v in batch.edge_index_dict.values()]),
+            on_step=True,
+            on_epoch=True,
+        )
+        
         loss = (
             batch_nll_loss
             + batch_kl_div_loss / self.nll_scale
             # + aux_kl_div_loss / self.nll_scale
             + herit_loss_value
             # + aux_reg_loss
+            + self.lambda_gene_align * gene_align_scale * gene_align_loss
         )
         self.log(
             "loss",
@@ -866,9 +931,7 @@ class LightningProxModel(L.LightningModule):
                 batch.n_id_dict,
                 node_weights_dict=self.node_weights_dict,
             )
-            kl_scale = min(self.current_epoch + 1 - self.n_no_kl, self.n_kl_warmup) / (
-                self.n_kl_warmup
-            ) if self.n_kl_warmup > 0 else 1.0
+            kl_scale = self._linear_warmup_scale(self.n_no_kl, self.n_kl_warmup)
             batch_kl_div_loss *= kl_scale
         else:
             batch_kl_div_loss = 0.0
@@ -897,8 +960,28 @@ class LightningProxModel(L.LightningModule):
             )
         else:
             herit_loss_value = torch.tensor(0.0)
+        
+        gene_align_loss = self.gene_alignment_loss()
+        gene_align_scale = self._linear_warmup_scale(self.gene_align_n_no, self.gene_align_n_warmup)
+        self.log(
+            "val_gene_align_loss",
+            gene_align_loss,
+            batch_size=sum([v.shape[1] for v in batch.edge_index_dict.values()]),
+            on_step=False,
+            on_epoch=True,
+        )
+        self.log(
+            "val_gene_align_loss_weighted",
+            self.lambda_gene_align * gene_align_scale * gene_align_loss,
+            batch_size=sum([v.shape[1] for v in batch.edge_index_dict.values()]),
+            on_step=False,
+            on_epoch=True,
+        )
         loss = (
-            batch_nll_loss + batch_kl_div_loss / self.val_nll_scale + herit_loss_value
+            batch_nll_loss + 
+            batch_kl_div_loss / self.val_nll_scale + 
+            herit_loss_value
+            + self.lambda_gene_align * gene_align_scale * gene_align_loss
         )
         self.log(
             "val_nll_loss_monitored",
@@ -1015,6 +1098,13 @@ class LightningProxModel(L.LightningModule):
                     0
                 ]["lr"],
             )
+    
+    def _linear_warmup_scale(self, n_no: int, n_warmup: int) -> float:
+        if self.current_epoch < n_no:
+            return 0.0
+        if n_warmup <= 0:
+            return 1.0
+        return float(min(self.current_epoch + 1 - n_no, n_warmup) / n_warmup)
 
     def on_save_checkpoint(self, checkpoint):
         # Remove the argument from the checkpoint before it is saved
