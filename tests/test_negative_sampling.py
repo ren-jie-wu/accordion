@@ -126,7 +126,7 @@ def test_model_no_extra_negatives_when_batch_negative_false():
         v.shape[1] for v in batch.edge_index_dict.values()
     )
 
-    nll, neg_edge_index_dict, _ = model.nll_loss(
+    *_, neg_edge_index_dict, _ = model.nll_loss(
         batch=batch,
         z_dict=z_dict,
         pos_edge_index_dict=batch.edge_index_dict,
@@ -143,7 +143,6 @@ def test_model_no_extra_negatives_when_batch_negative_false():
     assert total_edges_before == sum(
         v.shape[1] for v in batch.edge_index_dict.values()
     ), "total_edges_before is not correct"
-
 
 def test_model_generates_negatives_when_batch_negative_true():
     pldata = make_pldata(batch_negative=True)
@@ -167,7 +166,7 @@ def test_model_generates_negatives_when_batch_negative_true():
     mu_dict, logstd_dict = model.encode(batch)
     z_dict = model.reparametrize(mu_dict, logstd_dict)
 
-    nll, neg_edge_index_dict, _ = model.nll_loss(
+    *_, neg_edge_index_dict, _ = model.nll_loss(
         batch=batch,
         z_dict=z_dict,
         pos_edge_index_dict=batch.edge_index_dict,
@@ -296,7 +295,7 @@ def test_batch_negative_sampling_same_sample_in_model():
     mu_dict, logstd_dict = model.encode(batch)
     z_dict = model.reparametrize(mu_dict, logstd_dict)
 
-    _, neg_edge_index_dict, _ = model.nll_loss(
+    *_, neg_edge_index_dict, _ = model.nll_loss(
         batch=batch,
         z_dict=z_dict,
         pos_edge_index_dict=batch.edge_index_dict,

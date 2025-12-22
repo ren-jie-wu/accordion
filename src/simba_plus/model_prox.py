@@ -341,6 +341,7 @@ class LightningProxModel(L.LightningModule):
         reweight_rarecell_neighbors: Optional[int] = None,
         verbose: bool = False,
         batch_negative: bool = False, # make the default same as in the CLI
+        monitor_key: str = None,
 
         lambda_gene_align: float = 0.0,
         gene_align_n_no: int = 0,
@@ -402,6 +403,8 @@ class LightningProxModel(L.LightningModule):
         self.aux_params = AuxParams(data, edgetype_specific=edgetype_specific)
         self.verbose = verbose
         self.batch_negative = batch_negative
+
+        self.monitor_key = monitor_key
 
         self.lambda_gene_align = lambda_gene_align
         self.gene_align_n_no = gene_align_n_no
@@ -1050,7 +1053,7 @@ class LightningProxModel(L.LightningModule):
                 "scheduler": scheduler,
                 "interval": "epoch",
                 "frequency": 1,
-                "monitor": "val/nll",
+                "monitor": self.monitor_key,
                 "strict": False,
             }
         ]

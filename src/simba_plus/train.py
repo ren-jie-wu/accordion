@@ -284,7 +284,9 @@ def run(
         )
     else:
         herit_loss = None
-
+    
+    MONITOR_KEY = "val/nll"
+    
     rpvgae = LightningProxModel(
         data,
         encoder_class=TransEncoder,
@@ -304,6 +306,7 @@ def run(
         verbose=verbose,
         num_neg_samples_fold=negative_sampling_fold,
         batch_negative=batch_negative,
+        monitor_key=MONITOR_KEY,
 
         lambda_gene_align=lambda_gene_align,
         gene_align_n_no=gene_align_n_no,
@@ -349,14 +352,14 @@ def run(
 
         # prepare callbacks
         early_stopping_callback = MyEarlyStopping(
-            monitor="val_nll_loss",
+            monitor=MONITOR_KEY,
             mode="min",
             strict=True,
             patience=early_stopping_steps,
         )
         checkpoint_callback = ModelCheckpoint(
             checkpoint_dir,
-            monitor="val_nll_loss",
+            monitor=MONITOR_KEY,
             mode="min",
             save_last=True,
         )
