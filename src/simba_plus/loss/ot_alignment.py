@@ -49,9 +49,20 @@ def sinkhorn_uniform_logdomain(
     n_iters: int = 50,
 ) -> torch.Tensor:
     """
-    Entropic OT with uniform marginals using log-domain Sinkhorn for stability.
-    C: (n, m) cost matrix
-    Returns coupling P: (n, m) with sum(P)=1 approximately
+    Log-domain Sinkhorn iterations for entropic OT (uniform marginals).
+
+    Parameters:
+        C: (n, m) cost matrix
+        eps: entropic regularization parameter
+        n_iters: number of Sinkhorn iterations
+    
+    Returns:
+        P: (n, m) coupling matrix with sum(P)=1 approximately
+    
+    Notes:
+        Algorithm: Sinkhorn-Knopp scaling with entropic regularization (Cuturi, 2013).
+        Log-domain stabilization follows standard derivations (e.g., Peyré & Cuturi, 2019).
+        Implementation is a minimal PyTorch variant; conceptually similar to POT's `sinkhorn_log`.
     """
     if C.ndim != 2:
         raise ValueError("C must be 2D")

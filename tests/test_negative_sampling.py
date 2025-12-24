@@ -242,13 +242,13 @@ def test_dataset_negative_sampling_same_sample_in_full_data():
     full_data = ds.full_data
     etype = ("cell", "expresses", "gene")
 
-    # 1) 数量：full_data 里 edge_index/edge_attr 包含 pos+neg
+    # 1) Number: full_data contains pos+neg edges
     n_total = full_data[etype].edge_index.size(1)
     n_pos = ds.data[etype].edge_index.size(1)  # original positive edges in full graph
     n_neg = n_total - n_pos
     assert n_neg == n_pos * NEG_FOLD, f"Expected {n_pos*NEG_FOLD} neg edges, got {n_neg}"
 
-    # 2) 不跨 sample：只检查负边（edge_attr==0）
+    # 2) No cross-sample: only check negative edges (edge_attr==0)
     neg_mask = full_data[etype].edge_attr == 0
     neg_ei = full_data[etype].edge_index[:, neg_mask]
     cs = full_data["cell"].sample[neg_ei[0]]
@@ -266,7 +266,7 @@ def test_dataset_negative_sampling_batches_do_not_cross_sample():
     neg_mask = (attr == 0)
 
     if int(neg_mask.sum().item()) == 0:
-        return  # 极小 batch 可能碰巧没采到负边，允许跳过
+        return  # Very small batch may not sample any negative edges, allow skipping
 
     neg_ei = ei[:, neg_mask]
     cs = batch["cell"].sample[neg_ei[0]]

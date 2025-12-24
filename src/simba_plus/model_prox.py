@@ -1085,7 +1085,7 @@ class LightningProxModel(L.LightningModule):
 
     def _compute_ot_plan(self):
         if self.lambda_ot > 0:
-            # warmup = 0 时不值得算 plan（省时间）
+            # No need to calculate OT plan when weight = 0
             ot_scale = self._linear_warmup_scale(self.ot_n_no, self.ot_n_warmup)
             need_plan = (ot_scale > 0) and (self.current_epoch % self.ot_plan_every_n_epochs == 0)
 
