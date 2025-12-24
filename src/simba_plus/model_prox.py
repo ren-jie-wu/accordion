@@ -577,7 +577,7 @@ class LightningProxModel(L.LightningModule):
             loss_dict[edge_type] = pos_loss
             if neg_sample:
                 neg_dist = neg_dist_dict[edge_type]
-                neg_edge_weights = torch.zeros( #TODO: check this: is it okay to use zeros as negative edge weights?
+                neg_edge_weights = torch.zeros(
                     neg_dist.event_shape, device=pos_edge_weights.device
                 )
                 neg_loss = -neg_dist.log_prob(neg_edge_weights).sum()
@@ -701,10 +701,7 @@ class LightningProxModel(L.LightningModule):
             weighted_nll_dict[edge_type] = nll * edgetype_weight
         return l, weighted_nll_dict, neg_edge_index_dict, metric_dict
 
-    def gene_alignment_loss(self) -> torch.Tensor:
-        if self.lambda_gene_align <= 0 or self._gene_pairs is None:
-            return torch.tensor(0.0)
-        
+    def gene_alignment_loss(self) -> torch.Tensor:        
         gene_mu = self.encoder.__mu_dict__["gene"] # (n_genes, n_latent_dims)
         pairs = self._gene_pairs
         return gene_alignment_msd_loss(gene_mu, pairs)
@@ -773,11 +770,13 @@ class LightningProxModel(L.LightningModule):
             herit_loss_value = torch.tensor(0.0)
         
         # ---- Gene Alignment ----
-        gene_align_loss = self.gene_alignment_loss()
-        gene_align_scale = self._linear_warmup_scale(self.gene_align_n_no, self.gene_align_n_warmup)
+        compute_gene_align_now, gene_align_weight = self._compute_gene_align_now(return_weight=True)
 
-        self._log_metric("gene_align", gene_align_loss, batch_size=bs_edges, on_step=True, on_epoch=True, prog_bar=False)
-        self._log_metric("gene_align_weighted", self.lambda_gene_align * gene_align_scale * gene_align_loss, on_step=True, on_epoch=True, prog_bar=False)
+        gene_align_loss = torch.tensor(0.0, device=self.device)
+        if compute_gene_align_now:
+            gene_align_loss = self.gene_alignment_loss()
+            self._log_metric("gene_align", gene_align_loss, batch_size=bs_edges, on_step=True, on_epoch=True, prog_bar=False)
+            self._log_metric("gene_align_weighted", gene_align_weight * gene_align_loss, on_step=True, on_epoch=True, prog_bar=False)
 
         loss = (
             batch_nll_loss
@@ -785,7 +784,7 @@ class LightningProxModel(L.LightningModule):
             # + aux_kl_div_loss / self.nll_scale
             + herit_loss_value
             # + aux_reg_loss
-            + self.lambda_gene_align * gene_align_scale * gene_align_loss
+            + gene_align_weight * gene_align_loss
         )
 
         self._log_metric("loss", loss, batch_size=bs_edges, on_step=True, on_epoch=True, prog_bar=True)
@@ -969,22 +968,25 @@ class LightningProxModel(L.LightningModule):
             herit_loss_value = torch.tensor(0.0)
         
         # ---- Gene Alignment ----
-        gene_align_loss = self.gene_alignment_loss()
-        gene_align_scale = self._linear_warmup_scale(self.gene_align_n_no, self.gene_align_n_warmup)
-        
-        self._log_metric("gene_align", gene_align_loss, batch_size=bs_edges, on_step=False, on_epoch=True, prog_bar=False)
-        self._log_metric("gene_align_weighted", self.lambda_gene_align * gene_align_scale * gene_align_loss, on_step=False, on_epoch=True, prog_bar=False)
-        
+        compute_gene_align_now, gene_align_weight = self._compute_gene_align_now(return_weight=True)
+
+        gene_align_loss = torch.tensor(0.0, device=self.device)
+        if compute_gene_align_now:
+            gene_align_loss = self.gene_alignment_loss()
+            self._log_metric("gene_align", gene_align_loss, batch_size=bs_edges, on_step=False, on_epoch=True, prog_bar=False)
+            self._log_metric("gene_align_weighted", gene_align_weight * gene_align_loss, on_step=False, on_epoch=True, prog_bar=False)
+       
         loss = (
             batch_nll_loss + 
             1/self.val_nll_scale * kl_scale * batch_kl_div_loss + 
             herit_loss_value
-            + self.lambda_gene_align * gene_align_scale * gene_align_loss
+            + gene_align_weight * gene_align_loss
         )
 
         self._log_metric("loss", loss, batch_size=bs_edges, on_step=False, on_epoch=True, prog_bar=True)
 
         self.validation_step_outputs.append(loss)
+        self.local_step_val += 1
         return loss
 
     def mean_cell_neighbor_distance(self, k=50):
@@ -1003,6 +1005,17 @@ class LightningProxModel(L.LightningModule):
         mean_distances = knn_distances.mean(dim=1)
         weights = mean_distances / mean_distances.mean()
         return weights  # shape: (num_cells,)
+    
+    def _compute_gene_align_now(self, return_weight=False):
+        """Decide whether to compute gene alignment loss for this training/validation step."""
+        gene_align_weight = self.lambda_gene_align * self._linear_warmup_scale(self.gene_align_n_no, self.gene_align_n_warmup)
+        compute_gene_align_now = False
+        if gene_align_weight > 0 and self._gene_pairs is not None:
+            compute_gene_align_now = True
+        if return_weight:
+            return compute_gene_align_now, gene_align_weight
+        else:
+            return compute_gene_align_now
 
     def on_train_epoch_start(self):
         self.validation_step_outputs = []
@@ -1025,6 +1038,9 @@ class LightningProxModel(L.LightningModule):
 
     def on_train_batch_end(self, output, batch, batch_idx):
         self.t = time.time()
+
+    def on_validation_epoch_start(self):
+        self.local_step_val = 0
 
     def configure_optimizers(self):
         # Different learning rates for encoder vs aux_params
