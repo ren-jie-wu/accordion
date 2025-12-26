@@ -8,8 +8,7 @@ usage: simba+ load_data [-h] [--gene-adata GENE_ADATA [GENE_ADATA ...]]
                         [--batch-col BATCH_COL [BATCH_COL ...]]
                         --out-path OUT_PATH
 
-Load a HeteroData object from a given path and move it to the specified
-device.
+Prepare a HeteroData object from AnnData of RNA-seq and ATAC-seq data.
 
 options:
   -h, --help            show this help message and exit
