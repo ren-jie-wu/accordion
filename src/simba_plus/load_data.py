@@ -257,15 +257,17 @@ def make_sc_HetData_multi_rna(
 
     return data
 
-def load_from_path(path: str, device="cpu") -> HeteroData:
-    data = torch.load(path, map_location=device, weights_only=False)
+def load_from_path(path: str, device=None) -> HeteroData:
+    if device is not None:
+        warnings.warn("device argument is deprecated and might be removed in future versions. Currently load data stage does not support device transfer.")
+    data = torch.load(path, weights_only=False)
     data.generate_ids()
-    _make_tensor(data, device=device)
+    # _make_tensor(data, device=device)
     return data
 
 
 def add_argument(parser):
-    parser.description = "Load a HeteroData object from a given path and move it to the specified device."
+    parser.description = "Prepare a HeteroData object from AnnData of RNA-seq and ATAC-seq data."
     parser.add_argument(
         "--gene-adata",
         type=str,

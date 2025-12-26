@@ -23,6 +23,7 @@ import sys
 from pathlib import Path
 from logging.handlers import RotatingFileHandler
 import scipy.sparse as sp
+import warnings
 
 
 def negative_sampling(edge_index, num_nodes, num_neg_samples_fold=1):
@@ -386,7 +387,7 @@ def get_node_weights(
     pldata: L.LightningDataModule,
     checkpoint_dir: str,
     logger,
-    device: torch.device,
+    device: torch.device = None,
 ):
     """
     Compute or load per-node weights as 1/(degree+1).
@@ -406,36 +407,30 @@ def get_node_weights(
     node_weights_dict : dict
         Dictionary of per-node-type weights.
     """
+    if device is not None:
+        warnings.warn("device argument is deprecated and might be removed in future versions."\
+                      "Currently get node weights stage does not support device transfer.")
     node_weights_path = os.path.join(checkpoint_dir, "node_weights_dict.pt")
     if os.path.exists(node_weights_path):
         try:
-            loaded = torch.load(node_weights_path, map_location="cpu", weights_only=False)
-            # Convert loaded values to device tensors if needed
-            node_weights_dict = {
-                k: (
-                    v.to(device)
-                    if isinstance(v, torch.Tensor)
-                    else torch.tensor(v, device=device)
-                )
-                for k, v in loaded.items()
-            }
+            node_weights_dict = torch.load(node_weights_path, weights_only=False)
             logger.info(f"Loaded node_weights_dict from {node_weights_path}")
         except Exception as e:  # pragma: no cover - best-effort load
             logger.info(
                 f"Failed to load node_weights_dict from {node_weights_path}: {e}; recomputing node weights..."
             )
             os.remove(node_weights_path)
-            return get_node_weights(data, pldata, checkpoint_dir, logger, device)
+            return get_node_weights(data, pldata, checkpoint_dir, logger)
     else:
         logger.info("Computing node weights...")
         node_counts_dict = {
-            node_type: torch.ones(x.shape[0], device=device)
+            node_type: torch.ones(x.shape[0])
             for (node_type, x) in data.n_id_dict.items()
         }
         for edge_type in data.edge_types:
             src, _, dst = edge_type
-            node_counts_dict[src] += degree(data[edge_type].edge_index[0].to(device), num_nodes=data[src].num_nodes)
-            node_counts_dict[dst] += degree(data[edge_type].edge_index[1].to(device), num_nodes=data[dst].num_nodes)
+            node_counts_dict[src] += degree(data[edge_type].edge_index[0], num_nodes=data[src].num_nodes)
+            node_counts_dict[dst] += degree(data[edge_type].edge_index[1], num_nodes=data[dst].num_nodes)
 
         node_weights_dict = {k: 1.0 / v for k, v in node_counts_dict.items()}
         logger.info(f"Saving node weights to {node_weights_path}...")

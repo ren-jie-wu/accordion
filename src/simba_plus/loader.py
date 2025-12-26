@@ -8,6 +8,7 @@ from torch_geometric.transforms.to_device import ToDevice
 from copy import copy
 import pickle as pkl
 import time
+import warnings
 
 from simba_plus.negative_sampling import negative_sampling_same_sample_bipartite
 
@@ -98,11 +99,6 @@ class CustomNSMultiIndexDataset(Dataset):
         `edge_index_dict`, `type_assignments`, and `all_edge_idx` to include both
         positive and negative edges.
 
-        Parameters
-        ----------
-        device : torch.device, optional
-            Dummy parameter for now.
-
         Returns
         -------
         None
@@ -112,10 +108,12 @@ class CustomNSMultiIndexDataset(Dataset):
         Should be called at least once before training; can be called once per
         epoch to resample negatives.
         """
+        if device is not None:
+            warnings.warn("device argument is deprecated and might be removed in future versions."\
+                          "Currently negative sampling stage does not support device transfer.")
+        
         t1 = time.time()
         self.setup_count += 1
-        if device is None:
-            device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         torch_geometric.seed.seed_everything(self.setup_count)
         self.setup_count += 1
         self.full_data = copy(self.data)
@@ -142,7 +140,7 @@ class CustomNSMultiIndexDataset(Dataset):
                         num_neg_samples=len(self.pos_idx_dict[edge_type])
                         * self.negative_sampling_fold,
                         method="sparse",
-                    ).to(self.data[edge_type].edge_index.device)
+                    )#.to(self.data[edge_type].edge_index.device)
                 self.full_data[edge_type].edge_index = torch.cat(
                     [self.data[edge_type].edge_index, neg_edge_index], dim=1
                 )
@@ -152,7 +150,7 @@ class CustomNSMultiIndexDataset(Dataset):
                         torch.zeros(
                             neg_edge_index.size(1),
                             dtype=self.data[edge_type].edge_attr.dtype,
-                            device=self.data[edge_type].edge_attr.device,
+                            #device=self.data[edge_type].edge_attr.device,
                         ),
                     ],
                 )
@@ -168,7 +166,7 @@ class CustomNSMultiIndexDataset(Dataset):
                                 + neg_edge_index.size(1)
                             ),
                             dtype=torch.long,
-                            device=self.pos_idx_dict[edge_type].device,
+                            #device=self.pos_idx_dict[edge_type].device,
                         ),
                     ],
                     dim=0,

@@ -43,7 +43,7 @@ class RelationalEdgeDistributionDecoder(torch.nn.Module):
     def __init__(
         self,
         data: HeteroData,
-        device="cpu",
+        device=None,
     ) -> None:
         """Initialize the decoder with shared projection matrix per relation type.
         See https://pytorch-geometric.readthedocs.io/en/latest/_modules/torch_geometric/nn/conv/hgt_conv.html#HGTConv
@@ -54,7 +54,9 @@ class RelationalEdgeDistributionDecoder(torch.nn.Module):
             add_covariate: add covariate to cell node
         """
         super().__init__()
-        self.device = device
+        if device is not None:
+            warnings.warn("device argument is deprecated and might be removed in future versions."\
+                          "Currently RelationalEdgeDistributionDecoder does not take device argument.")
         self.prob_dict = torch.nn.ModuleDict()
         for edge_type in data.edge_types:
             if edge_type in data.edge_dist_dict.keys():

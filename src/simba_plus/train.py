@@ -198,16 +198,19 @@ def run(
     checkpoint_dir = os.path.join(prefix, f"{run_id}.checkpoints/")
     logger = setup_logging(checkpoint_dir)
     os.makedirs(checkpoint_dir, exist_ok=True)
+    
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     logger.info(f"Run ID: {run_id}")
     logger.info(f"Using {device} as device...")
-    # torch.set_default_device(device)
-    data = simba_plus.load_data.load_from_path(data_path, device=device)
+    if device.type == "cuda":
+        logger.warning("If you want to disable GPU, run `export CUDA_VISIBLE_DEVICES=''` before training.")
+
+    data = simba_plus.load_data.load_from_path(data_path)
     data.generate_ids()
     for node_type in data.node_types:
         del data[node_type].x
 
-    logger.info(f"Data loaded to {data['cell'].n_id.device}: {data}")
+    logger.info("Data loaded successfully.")
     dim_u = hidden_dims
 
     # Only get adata from the last checkpoint
@@ -246,7 +249,6 @@ def run(
         pldata=pldata,
         checkpoint_dir=checkpoint_dir,
         logger=logger,
-        device=device,
     )
 
     # n_batches and n_val_batches are actually not used in get_nll_scales()

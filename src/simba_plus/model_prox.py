@@ -13,6 +13,7 @@ from torch_geometric.transforms.to_device import ToDevice
 from torch_geometric.utils import negative_sampling
 from simba_plus.encoders import TransEncoder
 from simba_plus.constants import MIN_LOGSTD, MAX_LOGSTD
+import warnings
 
 # from simba_plus.utils import negative_sampling
 
@@ -38,6 +39,16 @@ from simba_plus.loss.ot_alignment import (
     TwoSampleOTState,
 )
 
+
+class BufferDict(nn.Module):
+    def __init__(self, d: Dict[str, Tensor]):
+        super().__init__()
+        for k, v in d.items():
+            name = f"_{k}"
+            self.register_buffer(name, v)
+    
+    def __getitem__(self, key: str) -> Tensor:
+        return getattr(self, f"_{key}")
 
 
 class AuxParams(nn.Module):
@@ -112,19 +123,16 @@ class AuxParams(nn.Module):
                 self.logscale_dict[dst_key] = nn.Parameter(
                     torch.zeros(
                         (n_batches, data[dst].num_nodes),
-                        # device=self.device,
                     )
                 )
                 self.bias_dict[dst_key] = nn.Parameter(
                     torch.zeros(
                         (n_batches, data[dst].num_nodes),
-                        # device=self.device,
                     )
                 )
                 self.std_dict[dst_key] = nn.Parameter(
                     torch.zeros(
                         (n_batches, data[dst].num_nodes),
-                        # device=self.device,
                     )
                 )
 
@@ -136,13 +144,11 @@ class AuxParams(nn.Module):
                 self.bias_logstd_dict[dst_key] = nn.Parameter(
                     torch.zeros(
                         (n_batches, data[dst].num_nodes),
-                        # device=self.device,
                     )
                 )
                 self.std_logstd_dict[dst_key] = nn.Parameter(
                     torch.zeros(
                         (n_batches, data[dst].num_nodes),
-                        # device=self.device,
                     )
                 )
             else:
@@ -170,13 +176,11 @@ class AuxParams(nn.Module):
                 self.bias_logstd_dict[dst_key] = nn.Parameter(
                     torch.zeros(
                         data[dst].num_nodes,
-                        # device=self.device,
                     )
                 )
                 self.std_logstd_dict[dst_key] = nn.Parameter(
                     torch.zeros(
                         data[dst].num_nodes,
-                        # device=self.device,
                     )
                 )
 
@@ -208,6 +212,16 @@ class AuxParams(nn.Module):
         return -0.5 * weighted_sum(kls, weight)
 
     def batched(self, param, param_logstd):
+        """
+        Generate a batch of stochastic parameters based on baseline parameters, offsets, and deviations.
+
+        Args:
+            param: Baseline and offset parameters, shape: (num_batches, num_nodes)
+            param_logstd: Log standard deviations, shape: (num_batches, num_nodes)
+
+        Returns:
+            Stochastic parameters, shape: (num_batches, num_nodes)
+        """
         if self.training and self.use_batch:
             return_param = torch.cat(
                 [
@@ -250,6 +264,18 @@ class AuxParams(nn.Module):
         return l
 
     def forward(self, batch, edge_index_dict):
+        """
+        Get the parameters for the given batch and edge index dictionary.
+
+        Args:
+            batch: Batch object, providing
+                - batch[node_type].n_id: help convert local node IDs in `edge_index_dict` to global node IDs
+                - batch["cell"].batch: provide batch information for the cells
+            edge_index_dict: Edge index dictionary, each value is a tensor of shape (2, num_edges) with local node IDs
+
+        Returns:
+            Dictionary of parameters for the given batch and edge index dictionary
+        """
         src_logscale_dict, src_bias_dict, src_std_dict = {}, {}, {}
         dst_logscale_dict, dst_bias_dict, dst_std_dict = {}, {}, {}
         for edge_type, edge_index in edge_index_dict.items():
@@ -260,7 +286,7 @@ class AuxParams(nn.Module):
                 dst_key,
             ) = self.get_keys(src_type, dst_type, edge_type)
 
-            src_node_id = batch[src_type].n_id[edge_index[0]]
+            src_node_id = batch[src_type].n_id[edge_index[0]] # local id to global id
             src_logscale_dict[edge_type] = self.logscale_dict[src_key][src_node_id]
             src_bias_dict[edge_type] = self.bias_dict[src_key][src_node_id]
             src_std_dict[edge_type] = self.std_dict[src_key][src_node_id]
@@ -334,7 +360,7 @@ class LightningProxModel(L.LightningModule):
         encoder_class: torch.nn.Module = TransEncoder,
         n_latent_dims: int = 50,
         decoder_class: torch.nn.Module = RelationalEdgeDistributionDecoder,
-        device="cpu",
+        device=None,
         num_neg_samples_fold: int = 1,
         edgetype_specific: bool = True,
         edge_types: Optional[Tuple[str]] = None,
@@ -367,6 +393,10 @@ class LightningProxModel(L.LightningModule):
         ot_loss_every_n_steps: int = 1,
     ):
         super().__init__()
+        if device is not None:
+            warnings.warn(f"device is deprecated and will be removed in future versions."\
+                "Please use `model.to(device)` to move the model to the desired device instead.")
+        
         self.save_hyperparameters()
         self.nonneg = nonneg
         self.data = data
@@ -378,7 +408,6 @@ class LightningProxModel(L.LightningModule):
         )
         self.decoder = decoder_class(
             data,
-            device=device,
         )
         self.hsic = hsic
         if self.hsic is not None:
@@ -389,10 +418,10 @@ class LightningProxModel(L.LightningModule):
         self.n_kl_warmup = n_kl_warmup
         self.nll_scale = nll_scale
         self.val_nll_scale = val_nll_scale
-        self.num_nodes_dict = data.num_nodes_dict
+        # self.num_nodes_dict = data.num_nodes_dict
+        self.cell_weights = torch.ones(data["cell"].num_nodes)
         self.reweight_rarecell = reweight_rarecell
-        if self.reweight_rarecell:
-            self.cell_weights = torch.ones(data["cell"].num_nodes, device=device)
+        if self.reweight_rarecell: # not used
             if reweight_rarecell_neighbors is None:
                 reweight_rarecell_neighbors = max(20, int(data["cell"].num_nodes / 100))
             self.reweight_rarecell_neighbors = reweight_rarecell_neighbors
@@ -401,10 +430,11 @@ class LightningProxModel(L.LightningModule):
         else:
             self.edge_types = edge_types
         self.edgetype_loss_weight_dict = {
-            edgetype: data.num_edges
-            / len(data.edge_types)  # mean $ edges
-            / len(data[edgetype].edge_index[0])
-            for edgetype in self.edge_types
+            edgetype: torch.tensor(
+                data.num_edges
+                / len(data.edge_types)  # mean $ edges
+                / len(data[edgetype].edge_index[0])
+            ) for edgetype in self.edge_types
         }
 
         self.node_weights_dict = node_weights_dict
@@ -433,6 +463,7 @@ class LightningProxModel(L.LightningModule):
 
         self._register_gene_pairs()
         self._register_ot_state()
+        self._register_others()
     
     def _register_gene_pairs(self):
         self._gene_pairs: TwoSampleGenePairs | None = None
@@ -469,6 +500,12 @@ class LightningProxModel(L.LightningModule):
             # keep on CPU for now; we'll move to device when computing OT
             self._cell_idx0_all = idx0_all
             self._cell_idx1_all = idx1_all
+
+    def _register_others(self):
+        # self.register_buffer("cell_weights", self.cell_weights) # not used
+        self.edgetype_loss_weight_dict = BufferDict(self.edgetype_loss_weight_dict)
+        if self.node_weights_dict is not None:
+            self.node_weights_dict = BufferDict(self.node_weights_dict)
 
     def _stage(self) -> str:
         return "train" if self.training else "val"
@@ -515,9 +552,6 @@ class LightningProxModel(L.LightningModule):
         self._log_metric(f"{name}/perf", seconds, on_step=on_step, on_epoch=not on_step, prog_bar=False)
     
     def on_train_start(self):
-        self.node_weights_dict = {
-            k: v.to(self.device) for k, v in self.node_weights_dict.items()
-        }
         if self.hsic is not None:
             update_lr(self.hsic_optimizer, self.hsic.lam * self.learning_rate)
 
@@ -612,7 +646,7 @@ class LightningProxModel(L.LightningModule):
             if neg_sample:
                 neg_dist = neg_dist_dict[edge_type]
                 neg_edge_weights = torch.zeros(
-                    neg_dist.event_shape, device=pos_edge_weights.device
+                    neg_dist.event_shape, device=self.device
                 )
                 neg_loss = -neg_dist.log_prob(neg_edge_weights).sum()
                 loss_dict[edge_type] += neg_loss
@@ -750,6 +784,8 @@ class LightningProxModel(L.LightningModule):
         return ot_cost_from_plan_sqeuclidean(x, y, P)
 
     def training_step(self, batch, batch_idx):
+        batch = batch.to(self.device)
+        
         t_all0 = time.time()
 
         mu_dict, logstd_dict = self.encode(batch)
@@ -805,12 +841,12 @@ class LightningProxModel(L.LightningModule):
                     pid,
                 )
             else:
-                herit_loss_value = torch.tensor(0.0)
+                herit_loss_value = torch.tensor(0.0, device=self.device)
             t1 = time.time()
             self._log_metric("herit_loss", herit_loss_value, batch_size=bs_edges, on_step=True, on_epoch=True, prog_bar=False)
             self._log_perf("herit_loss", time.time() - t0, on_step=True)
         else:
-            herit_loss_value = torch.tensor(0.0)
+            herit_loss_value = torch.tensor(0.0, device=self.device)
         
         # ---- Gene Alignment ----
         compute_gene_align_now, gene_align_weight = self._compute_gene_align_now(return_weight=True)
@@ -970,6 +1006,8 @@ class LightningProxModel(L.LightningModule):
         self.logger2.info("=" * 60)
 
     def validation_step(self, batch, batch_idx):
+        batch = batch.to(self.device)
+        
         mu_dict, logstd_dict = self.encode(batch)
         z_dict = self.reparametrize(mu_dict, logstd_dict)
         
@@ -1018,10 +1056,10 @@ class LightningProxModel(L.LightningModule):
                     pid,
                 )
             else:
-                herit_loss_value = torch.tensor(0.0)
+                herit_loss_value = torch.tensor(0.0, device=self.device)
             self._log_metric("herit_loss", herit_loss_value, batch_size=bs_edges, on_step=False, on_epoch=True, prog_bar=False)
         else:
-            herit_loss_value = torch.tensor(0.0)
+            herit_loss_value = torch.tensor(0.0, device=self.device)
         
         # ---- Gene Alignment ----
         compute_gene_align_now, gene_align_weight = self._compute_gene_align_now(return_weight=True)
