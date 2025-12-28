@@ -131,7 +131,7 @@ def _align_gene_names(genes_list: List[List[str]]): #TODO
     """
     Align the gene names of the multiple RNA-seq datasets in case they use different naming systems.
     """
-    pass
+    pass #TODO
 
 
 def _check_no_duplicates(*genes_list: List[List[str]], name="RNA"):
@@ -148,6 +148,20 @@ def make_sc_HetData_multi_rna(
     cell_cat_cov_list: Optional[List[Optional[str]]] = None,
     n_dims: int = 50,
 ):
+    """
+    Construct a HeteroData object from multiple scRNA-seq datasets (cell-by-gene).
+
+    Notes
+    -----
+    - Cells from different samples are concatenated into one "cell" node type,
+      with `data["cell"].sample` indicating sample membership.
+    - Genes are also concatenated (sample-specific gene nodes), with
+      `data["gene"].sample` and `data["gene"].gene_id` enabling cross-sample alignment.
+    - For batch correction:
+        * `data["cell"].batch_local`: per-sample batch ids (0..B_s-1)
+        * `data["cell"].batch`: global batch ids with offsets, unique across samples
+    """
+
     if adata_CG_list is None or \
         len(adata_CG_list) == 0 or \
         all(adata is None for adata in adata_CG_list):
@@ -182,28 +196,36 @@ def make_sc_HetData_multi_rna(
     data["gene"].x = torch.zeros((sum(g_list), n_dims), dtype=torch.float)
 
     if any(cell_cat_cov is not None for cell_cat_cov in cell_cat_cov_list):
-        batch_all = torch.zeros((sum(n_list),), dtype=torch.long)
+        batch_local_all = torch.zeros((sum(n_list),), dtype=torch.long)
+        batch_global_all = torch.zeros((sum(n_list),), dtype=torch.long)
         offset = 0
         for i, (cell_cat_cov, adata) in enumerate(zip(cell_cat_cov_list, adata_CG_list)):
             if adata is None:
                 continue
             idx_start, idx_end = sum(n_list[:i]), sum(n_list[:i+1])
             if cell_cat_cov is not None and cell_cat_cov in adata.obs.columns:
-                codes = adata.obs[cell_cat_cov].astype("category").cat.codes.to_numpy().astype(np.int64)
-                batch_all[idx_start:idx_end] = torch.from_numpy(codes) + offset
-                offset += int(codes.max()) + 1 if codes.size > 0 else 1
+                codes_local = torch.from_numpy(adata.obs[cell_cat_cov]
+                    .astype("category")
+                    .cat.codes
+                    .to_numpy()
+                    .astype(np.int64)
+                ).long()
+                batch_local_all[idx_start:idx_end] = codes_local
+                batch_global_all[idx_start:idx_end] = codes_local + offset
+                offset += int(codes_local.max()) + 1 if codes_local.numel() > 0 else 0
             else:
-                batch_all[idx_start:idx_end] = offset
+                batch_local_all[idx_start:idx_end] = 0
+                batch_global_all[idx_start:idx_end] = offset
                 offset += 1
-        if batch_all.unique().numel() > 1:
-            data["cell"].batch = batch_all
+        data["cell"].batch_local = batch_local_all
+        data["cell"].batch = batch_global_all
 
     data["cell"].sample = torch.cat(
-        [torch.full((n,), i, dtype=torch.long) for i, n in enumerate(n_list)],
+        [torch.full((n,), i, dtype=torch.long) for i, n in enumerate(n_list) if n > 0],
         dim=0,
     )
     data["gene"].sample = torch.cat(
-        [torch.full((g,), i, dtype=torch.long) for i, g in enumerate(g_list)],
+        [torch.full((g,), i, dtype=torch.long) for i, g in enumerate(g_list) if g > 0],
         dim=0,
     )
 
@@ -211,6 +233,10 @@ def make_sc_HetData_multi_rna(
         torch.tensor(
             [gene_to_id[gene] for gene in genes], dtype=torch.long
         ) for genes in genes_list
+    ], dim=0)
+
+    data["gene"].local_id = torch.cat([
+        torch.arange(g, dtype=torch.long) for g in g_list
     ], dim=0)
 
     ## build edges

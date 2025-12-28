@@ -51,6 +51,44 @@ class BufferDict(nn.Module):
         return getattr(self, f"_{key}")
 
 
+class _PerSampleBatchedParam(nn.Module):
+    """
+    Store per-sample batched parameters:
+      - param[s]: (B_s, N_s)
+      - param_logstd[s]: (B_s, N_s)
+    """
+
+    def __init__(
+        self,
+        n_batches_per_sample: Dict[int, int],
+        n_nodes_per_sample: Dict[int, int],
+        sample_ids: Tuple[int, ...],
+        has_logstd: bool = True,
+        init: float = 0.0,
+    ) -> None:
+        super().__init__()
+        self.sample_ids = sample_ids
+        self.sample_to_listidx = {sid: i for i, sid in enumerate(sample_ids)}
+
+        self.param = nn.ParameterList()
+        self.has_logstd = has_logstd
+        if self.has_logstd:
+            self.param_logstd = nn.ParameterList()
+        for sid in sample_ids:
+            B = int(n_batches_per_sample.get(sid, 1))
+            N = int(n_nodes_per_sample.get(sid, 0))
+            self.param.append(nn.Parameter(torch.full((B, N), float(init))))
+            if self.has_logstd:
+                self.param_logstd.append(nn.Parameter(torch.zeros((B, N))))
+
+    def get(self, sample_id: int) -> Tuple[Tensor, Tensor]:
+        i = self.sample_to_listidx[int(sample_id)]
+        if self.has_logstd:
+            return self.param[i], self.param_logstd[i]
+        else:
+            return self.param[i]
+
+
 class AuxParams(nn.Module):
     def __init__(self, data: HeteroData, edgetype_specific: bool = True) -> None:
         """
@@ -75,141 +113,109 @@ class AuxParams(nn.Module):
             ]
         """
         super().__init__()
+        self.edgetype_specific = edgetype_specific
+
+        # multi-sample detection
+        if hasattr(data["cell"], "sample"):
+            self.sample_ids = tuple(sorted(
+                torch.unique(data["cell"].sample).detach().cpu().tolist()
+            ))
+        else:
+            self.sample_ids = (0,)
+        self.multi_sample = len(self.sample_ids) > 1
+
+        # if there are more than one batch, turn on use_batch
+        self.use_batch = (
+            (hasattr(data["cell"], "batch_local") 
+            and torch.unique(data["cell"].batch_local).numel() > 1)
+            or (hasattr(data["cell"], "batch")
+            and torch.unique(data["cell"].batch).numel() > len(self.sample_ids))
+        )
+
         # Batch correction for RNA-seq data
         self.bias_dict = nn.ParameterDict()
         self.logscale_dict = nn.ParameterDict()
         self.std_dict = nn.ParameterDict()
 
-        self.use_batch = False
-        self.edgetype_specific = edgetype_specific
-        # if there are more than one batch, turn on use_batch
-        if (
-            hasattr(data["cell"], "batch")
-            and torch.unique(data["cell"].batch).size(0) > 1
-        ):
-            self.use_batch = True
         self.bias_logstd_dict = nn.ParameterDict()
         self.logscale_logstd_dict = nn.ParameterDict()
         self.std_logstd_dict = nn.ParameterDict()
+
+        self.bias_dict_per_sample = nn.ModuleDict()
+        self.logscale_dict_per_sample = nn.ModuleDict()
+        self.std_dict_per_sample = nn.ModuleDict()
+
+        if self.multi_sample and self.use_batch:
+            # precompute n_batches per sample
+            n_batches_per_sample: Dict[int, int] = {sid: 1 for sid in self.sample_ids}
+            for sid in self.sample_ids:
+                mask = data["cell"].sample == sid
+                if mask.any():
+                    bmax = int(data["cell"].batch_local[mask].max().item())
+                    n_batches_per_sample[sid] = bmax + 1
+                else:
+                    n_batches_per_sample[sid] = 1
+            
+            # precompute n_nodes per sample
+            n_nodes_per_sample_per_type: Dict[str, Dict[int, int]] = {}
+            for node_type in data.node_types:
+                if not hasattr(data[node_type], "sample"):
+                    raise ValueError(f"Node type {node_type} does not have sample attribute while there are multiple samples")
+                n_nodes_per_sample_per_type[node_type] = {sid: 0 for sid in self.sample_ids}
+                for sid in self.sample_ids:
+                    mask = data[node_type].sample == sid
+                    n_nodes_per_sample_per_type[node_type][sid] = int(mask.sum().item())
+        
+        # build parameter containers per edge type
         for edge_type in data.edge_types:
             src, _, dst = edge_type
-            # if edgetype_specific is True, same node type but with different edge type will have different sets of parameters
-            if edgetype_specific:
-                src_key = make_key(src, edge_type)
-                dst_key = make_key(dst, edge_type)
-            else:
-                src_key = src
-                dst_key = dst
-            self.logscale_dict[src_key] = nn.Parameter(
-                torch.zeros(
-                    data[src].num_nodes,
-                )
-            )
-            self.bias_dict[src_key] = nn.Parameter(
-                torch.zeros(
-                    data[src].num_nodes,
-                )
-            )
-            self.std_dict[src_key] = nn.Parameter(
-                torch.zeros(
-                    data[src].num_nodes,
-                )
-            )
+            src_key, dst_key = self.get_keys(src, dst, edge_type)
 
-            # if use_batch, same dst node & edge type but with different batch will have different sets of parameters
-            if self.use_batch:
-                # number of batches
-                n_batches = len(data["cell"].batch.unique())
-                self.logscale_dict[dst_key] = nn.Parameter(
-                    torch.zeros(
-                        (n_batches, data[dst].num_nodes),
-                    )
-                )
-                self.bias_dict[dst_key] = nn.Parameter(
-                    torch.zeros(
-                        (n_batches, data[dst].num_nodes),
-                    )
-                )
-                self.std_dict[dst_key] = nn.Parameter(
-                    torch.zeros(
-                        (n_batches, data[dst].num_nodes),
-                    )
-                )
+            num_src_nodes = data[src].num_nodes
+            num_dst_nodes = data[dst].num_nodes
 
-                self.logscale_logstd_dict[dst_key] = nn.Parameter(
-                    torch.zeros(
-                        (n_batches, data[dst].num_nodes),
-                    ),
-                )
-                self.bias_logstd_dict[dst_key] = nn.Parameter(
-                    torch.zeros(
-                        (n_batches, data[dst].num_nodes),
+            # src params: always per-node
+            if src_key not in self.bias_dict:
+                self.bias_dict[src_key] = nn.Parameter(torch.zeros(num_src_nodes))
+                self.logscale_dict[src_key] = nn.Parameter(torch.zeros(num_src_nodes))
+                self.std_dict[src_key] = nn.Parameter(torch.zeros(num_src_nodes))
+            
+            # dst params: depending on use_batch and multi_sample
+            if not self.use_batch:
+                if dst_key not in self.bias_dict:
+                    self.bias_dict[dst_key] = nn.Parameter(torch.zeros(num_dst_nodes))
+                    self.logscale_dict[dst_key] = nn.Parameter(torch.zeros(num_dst_nodes))
+                    self.std_dict[dst_key] = nn.Parameter(torch.zeros(num_dst_nodes))
+            elif not self.multi_sample:
+                _batch = data["cell"].batch if hasattr(data["cell"], "batch") else data["cell"].batch_local
+                n_batches = int(torch.unique(_batch).numel())
+                if dst_key not in self.bias_dict:
+                    self.bias_dict[dst_key] = nn.Parameter(torch.zeros(n_batches, num_dst_nodes))
+                    self.logscale_dict[dst_key] = nn.Parameter(torch.zeros(n_batches, num_dst_nodes))
+                    self.std_dict[dst_key] = nn.Parameter(torch.zeros(n_batches, num_dst_nodes))
+                    self.bias_logstd_dict[dst_key] = nn.Parameter(torch.zeros(n_batches, num_dst_nodes))
+                    self.logscale_logstd_dict[dst_key] = nn.Parameter(torch.zeros(n_batches, num_dst_nodes))
+                    self.std_logstd_dict[dst_key] = nn.Parameter(torch.zeros(n_batches, num_dst_nodes))
+            else: # multi-sample and use_batch
+                if dst_key not in self.bias_dict_per_sample:
+                    self.bias_dict_per_sample[dst_key] = _PerSampleBatchedParam(
+                        n_batches_per_sample=n_batches_per_sample,
+                        n_nodes_per_sample=n_nodes_per_sample_per_type[dst],
+                        sample_ids=self.sample_ids,
+                        init=0.0,
                     )
-                )
-                self.std_logstd_dict[dst_key] = nn.Parameter(
-                    torch.zeros(
-                        (n_batches, data[dst].num_nodes),
+                    self.logscale_dict_per_sample[dst_key] = _PerSampleBatchedParam(
+                        n_batches_per_sample=n_batches_per_sample,
+                        n_nodes_per_sample=n_nodes_per_sample_per_type[dst],
+                        sample_ids=self.sample_ids,
+                        init=0.0,
                     )
-                )
-            else:
-                self.logscale_dict[dst_key] = nn.Parameter(
-                    torch.zeros(
-                        data[dst].num_nodes,
+                    self.std_dict_per_sample[dst_key] = _PerSampleBatchedParam(
+                        n_batches_per_sample=n_batches_per_sample,
+                        n_nodes_per_sample=n_nodes_per_sample_per_type[dst],
+                        sample_ids=self.sample_ids,
+                        init=0.0,
                     )
-                )
-                self.bias_dict[dst_key] = nn.Parameter(
-                    torch.zeros(
-                        data[dst].num_nodes,
-                    )
-                )
-
-                self.std_dict[dst_key] = nn.Parameter(
-                    torch.zeros(
-                        data[dst].num_nodes,
-                    )
-                )
-                self.logscale_logstd_dict[dst_key] = nn.Parameter(
-                    torch.zeros(
-                        data[dst].num_nodes,
-                    ),
-                )
-                self.bias_logstd_dict[dst_key] = nn.Parameter(
-                    torch.zeros(
-                        data[dst].num_nodes,
-                    )
-                )
-                self.std_logstd_dict[dst_key] = nn.Parameter(
-                    torch.zeros(
-                        data[dst].num_nodes,
-                    )
-                )
-
-    def _kl_loss(
-        self,
-        mu: Optional[Tensor] = None,
-        logstd: Optional[Tensor] = None,
-        weight: Optional[Tensor] = None,
-    ) -> Tensor:
-        r"""Computes the KL loss, either for the passed arguments :obj:`mu`
-        and :obj:`logstd`, or based on latent variables from last encoding.
-
-        Args:
-            mu (Tensor, optional): The latent space for :math:`\mu`. If set to
-                :obj:`None`, uses the last computation of :math:`mu`.
-                (default: :obj:`None`)
-            logstd (Tensor, optional): The latent space for
-                :math:`\log\sigma`.  If set to :obj:`None`, uses the last
-                computation of :math:`\log\sigma^2`.(default: :obj:`None`)
-            weight (Tensor, optional): weights of each position in the tensor.
-        """
-
-        def weighted_sum(x, w):
-            if w is None:
-                return x.sum()
-            return (x * w).sum()
-
-        kls = 1 + 2 * logstd - mu**2 - logstd.exp() ** 2
-        return -0.5 * weighted_sum(kls, weight)
 
     def batched(self, param, param_logstd):
         """
@@ -223,45 +229,84 @@ class AuxParams(nn.Module):
             Stochastic parameters, shape: (num_batches, num_nodes)
         """
         if self.training and self.use_batch:
+            if param.size(0) <= 1:
+                return param
             return_param = torch.cat(
                 [
                     param[[0], :],
-                    param[1:, :]
-                    + param[[0], :]
-                    + torch.randn_like(param_logstd[1:, :])
-                    * torch.exp(param_logstd[1:, :]),
+                    param[1:, :] + param[[0], :] + torch.randn_like(param_logstd[1:, :]) * torch.exp(param_logstd[1:, :]),
                 ],
-                axis=0,
+                dim=0,
             )
             return return_param
         return param
 
-    def regularization_loss(self, batch):
-        l = torch.tensor(0.0, device=next(self.parameters()).device)
-        for edge_type in batch.edge_types:
-            src_type, _, dst_type = edge_type
+    def _dst_values_per_edge(
+        self,
+        batch: HeteroData,
+        edge_index: Tensor,
+        dst_type: str,
+        dst_key: str,
+        which: str,
+    ) -> Tensor:
+        """
+        Return a (num_edges,) tensor of dst parameters for this edge_type.
 
-            (
-                src_key,
-                dst_key,
-            ) = self.get_keys(src_type, dst_type, edge_type)
+        which in {"logscale","bias","std"}.
+        """
+        device = edge_index.device
+        num_edges = edge_index.size(1)
 
-            src_node_id = batch[src_type].n_id
-            l += (self.logscale_dict[src_key][src_node_id]).pow(2).sum()
-            l += (self.bias_dict[src_key][src_node_id]).pow(2).sum()
-            l += (self.std_dict[src_key][src_node_id]).pow(2).sum()
+        if not self.use_batch:
+            dst_global = batch[dst_type].n_id[edge_index[1]]
+            if which == "logscale":
+                return self.logscale_dict[dst_key][dst_global]
+            if which == "bias":
+                return self.bias_dict[dst_key][dst_global]
+            if which == "std":
+                return self.std_dict[dst_key][dst_global]
+            raise ValueError(f"Unknown which={which}")
 
-            if self.use_batch:
-                dst_node_id = batch[dst_type].n_id
-                l += (self.logscale_dict[dst_key][:, dst_node_id]).pow(2).sum()
-                l += (self.bias_dict[dst_key][:, dst_node_id]).pow(2).sum()
-                l += (self.std_dict[dst_key][:, dst_node_id]).pow(2).sum()
+        # use_batch == True
+        if self.multi_sample:
+            # Per-sample: index by (cell.sample, cell.batch_local, dst.local_id)
+            samples = batch["cell"].sample[edge_index[0]].long()
+            b_local = batch["cell"].batch_local[edge_index[0]].long()
+            dst_local = batch[dst_type].local_id[edge_index[1]].long()
+
+            out = torch.empty((num_edges,), device=device, dtype=torch.float32)
+
+            if which == "logscale":
+                mod = self.logscale_dict_per_sample[dst_key]
+            elif which == "bias":
+                mod = self.bias_dict_per_sample[dst_key]
+            elif which == "std":
+                mod = self.std_dict_per_sample[dst_key]
             else:
-                dst_node_id = batch[dst_type].n_id
-                l += (self.logscale_dict[dst_key][dst_node_id]).pow(2).sum()
-                l += (self.bias_dict[dst_key][dst_node_id]).pow(2).sum()
-                l += (self.std_dict[dst_key][dst_node_id]).pow(2).sum()
-        return l
+                raise ValueError(f"Unknown which={which}")
+
+            for sid in torch.unique(samples).detach().cpu().tolist():
+                sid = int(sid)
+                mask = (samples == sid)
+                if not mask.any():
+                    continue
+                p, p_logstd = mod.get(sid)
+                p_eff = self.batched(p, p_logstd)
+                out[mask] = p_eff[b_local[mask], dst_local[mask]].to(out.dtype)
+            return out
+
+        # Legacy global batched dst params: index by global batch (prefer batch_local if exists)
+        dst_global = batch[dst_type].n_id[edge_index[1]]
+        _batch = batch["cell"].batch if hasattr(batch["cell"], "batch") else batch["cell"].batch_local
+        b = _batch[edge_index[0]].long()
+
+        if which == "logscale":
+            return self.batched(self.logscale_dict[dst_key], self.logscale_logstd_dict[dst_key])[b, dst_global]
+        if which == "bias":
+            return self.batched(self.bias_dict[dst_key], self.bias_logstd_dict[dst_key])[b, dst_global]
+        if which == "std":
+            return self.batched(self.std_dict[dst_key], self.std_logstd_dict[dst_key])[b, dst_global]
+        raise ValueError(f"Unknown which={which}")
 
     def forward(self, batch, edge_index_dict):
         """
@@ -280,34 +325,17 @@ class AuxParams(nn.Module):
         dst_logscale_dict, dst_bias_dict, dst_std_dict = {}, {}, {}
         for edge_type, edge_index in edge_index_dict.items():
             src_type, _, dst_type = edge_type
-
-            (
-                src_key,
-                dst_key,
-            ) = self.get_keys(src_type, dst_type, edge_type)
+            src_key, dst_key = self.get_keys(src_type, dst_type, edge_type)
 
             src_node_id = batch[src_type].n_id[edge_index[0]] # local id to global id
             src_logscale_dict[edge_type] = self.logscale_dict[src_key][src_node_id]
             src_bias_dict[edge_type] = self.bias_dict[src_key][src_node_id]
             src_std_dict[edge_type] = self.std_dict[src_key][src_node_id]
 
-            dst_node_id = batch[dst_type].n_id[edge_index[1]]
-            if self.use_batch:
-                batches = batch["cell"].batch[edge_index[0]].long()
-                dst_logscale_dict[edge_type] = self.batched(
-                    self.logscale_dict[dst_key],
-                    self.logscale_logstd_dict[dst_key],
-                )[batches, dst_node_id]
-                dst_bias_dict[edge_type] = self.batched(
-                    self.bias_dict[dst_key], self.bias_logstd_dict[dst_key]
-                )[batches, dst_node_id]
-                dst_std_dict[edge_type] = self.batched(
-                    self.std_dict[dst_key], self.std_logstd_dict[dst_key]
-                )[batches, dst_node_id]
-            else:
-                dst_logscale_dict[edge_type] = self.logscale_dict[dst_key][dst_node_id]
-                dst_bias_dict[edge_type] = self.bias_dict[dst_key][dst_node_id]
-                dst_std_dict[edge_type] = self.std_dict[dst_key][dst_node_id]
+            dst_logscale_dict[edge_type] = self._dst_values_per_edge(batch, edge_index, dst_type, dst_key, "logscale")
+            dst_bias_dict[edge_type] = self._dst_values_per_edge(batch, edge_index, dst_type, dst_key, "bias")
+            dst_std_dict[edge_type] = self._dst_values_per_edge(batch, edge_index, dst_type, dst_key, "std")
+        
         return {
             "src_logscale_dict": src_logscale_dict,
             "src_bias_dict": src_bias_dict,
@@ -328,28 +356,6 @@ class AuxParams(nn.Module):
             src_key,
             dst_key,
         )
-
-    def kl_div_loss(self, batch, node_weights_dict):
-        l = torch.tensor(0.0, device=next(self.parameters()).device)
-        for edge_type in batch.edge_types:
-            src_type, _, dst_type = edge_type
-            (
-                src_key,
-                dst_key,
-            ) = self.get_keys(src_type, dst_type, edge_type)
-            if self.use_batch:
-                dst_node_id = batch[dst_type].n_id
-                weight = node_weights_dict[dst_type][dst_node_id]
-                m_logscale = self.logscale_dict[dst_key][1:, dst_node_id]
-                logstd_logscale = self.logscale_logstd_dict[dst_key][1:, dst_node_id]
-                l += self._kl_loss(m_logscale, logstd_logscale, weight)
-                m_bias = self.bias_dict[dst_key][1:, dst_node_id]
-                logstd_bias = self.bias_logstd_dict[dst_key][1:, dst_node_id]
-                l += self._kl_loss(m_bias, logstd_bias, weight)
-                m_std = self.std_dict[dst_key][1:, dst_node_id]
-                logstd_std = self.std_logstd_dict[dst_key][1:, dst_node_id]
-                l += self._kl_loss(m_std, logstd_std, weight)
-        return l
 
 
 class LightningProxModel(L.LightningModule):
@@ -784,7 +790,7 @@ class LightningProxModel(L.LightningModule):
         return ot_cost_from_plan_sqeuclidean(x, y, P)
 
     def training_step(self, batch, batch_idx):
-        batch = batch.to(self.device)
+        # batch = batch.to(self.device)
         
         t_all0 = time.time()
 
@@ -1006,7 +1012,7 @@ class LightningProxModel(L.LightningModule):
         self.logger2.info("=" * 60)
 
     def validation_step(self, batch, batch_idx):
-        batch = batch.to(self.device)
+        # batch = batch.to(self.device)
         
         mu_dict, logstd_dict = self.encode(batch)
         z_dict = self.reparametrize(mu_dict, logstd_dict)

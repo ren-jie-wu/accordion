@@ -8,6 +8,7 @@ import argparse
 import warnings
 import pickle as pkl
 import math
+import glob
 
 warnings.simplefilter(action="ignore", category=FutureWarning)
 import anndata as ad
@@ -18,7 +19,7 @@ import torch_geometric
 from torch_geometric.transforms.to_device import ToDevice
 import lightning as L
 from lightning.pytorch.tuner import Tuner
-
+# from lightning.pytorch.profilers import SimpleProfiler  
 from lightning.pytorch.callbacks import (
     ModelCheckpoint,
     LearningRateMonitor,
@@ -95,6 +96,14 @@ def get_run_id(
     **kwargs,
 ):
     return f"simba+{os.path.basename(data_path).split('_hetdata.dat')[0]}_{human_format(batch_size)}{'x'+str(n_batch_sampling) if n_batch_sampling > 1 else ''}{'.indep2_' + format(hsic_lam, '1.0e') if hsic_lam != 0 else ''}{os.path.basename(sumstats).split('.txt')[0] if sumstats is not None else ''}{'_'+format(sumstats_lam, '1.0e') if sumstats is not None and sumstats_lam != 1.0 else ''}{'.d' + str(hidden_dims) if hidden_dims != 50 else ''}{'.en' if not edgetype_specific else ''}{'.nn' if nonneg else ''}.randinit"
+
+
+def get_last_model_path(checkpoint_dir, checkpoint_suffix="") -> str:
+    last_model_path = f"{checkpoint_dir}/last{checkpoint_suffix}.ckpt"
+    if not os.path.exists(last_model_path):
+        latest_ckpt = max(glob.glob(f"{checkpoint_dir}/*.ckpt"), key=os.path.getctime)
+        last_model_path = latest_ckpt
+    return last_model_path
 
 
 def run(
@@ -352,6 +361,7 @@ def run(
             logger.info("W&B logging disabled; using CSV logger instead.")
             pl_logger = CSVLogger(save_dir=checkpoint_dir, name="pl_logs")
 
+        # profiler = SimpleProfiler(dirpath=checkpoint_dir, filename="profile_simple")
         # prepare callbacks
         early_stopping_callback = MyEarlyStopping(
             monitor=MONITOR_KEY,
@@ -363,7 +373,8 @@ def run(
             checkpoint_dir,
             monitor=MONITOR_KEY,
             mode="min",
-            save_last=True,
+            save_last=False,
+            save_top_k=1,
         )
         lrmonitor_callback = LearningRateMonitor()
         onexception_callback = OnExceptionCheckpoint(checkpoint_dir)
@@ -376,13 +387,14 @@ def run(
                 lrmonitor_callback,
                 # onexception_callback,
             ],
+            # profiler=profiler,
             logger=pl_logger,
             devices=1,
             default_root_dir=checkpoint_dir,
             num_sanity_val_steps=0,
             reload_dataloaders_every_n_epochs=5,
             check_val_every_n_epoch=1,
-            log_every_n_steps=10,
+            log_every_n_steps=50,
             max_epochs=max_epochs,
         )
         if not load_checkpoint:
@@ -408,14 +420,17 @@ def run(
                 else None
             ),
         )
-        return checkpoint_callback.last_model_path
+        last_model_path = checkpoint_callback.last_model_path
+        if not last_model_path or not os.path.exists(last_model_path):
+            last_model_path = get_last_model_path(checkpoint_dir, checkpoint_suffix)
+        return last_model_path
 
     last_model_path = train(
         rpvgae,
         run_id=run_id,
         use_wandb=not no_wandb,
     )
-    torch.save(rpvgae.state_dict(), os.path.join(prefix, f"{run_id}.model"))
+    # torch.save(rpvgae.state_dict(), os.path.join(prefix, f"{run_id}.model"))
     save_files(
         os.path.join(prefix, run_id),
         last_model_path,
@@ -466,11 +481,7 @@ def save_files(
     adata_CG = ad.read_h5ad(cell_adata) if cell_adata is not None else None
     adata_CP = ad.read_h5ad(peak_adata) if peak_adata is not None else None
     if last_model_path is None:
-        last_model_path = f"{run_id}.checkpoints/last{checkpoint_suffix}.ckpt"
-    else:
-        checkpoint_suffix = (
-            os.path.basename(last_model_path).split("last")[1].split(".ckpt")[0]
-        )
+        last_model_path = get_last_model_path(f"{run_id}.checkpoints", checkpoint_suffix)
     logger.info(
         f"Saving model outputs from checkpoint {last_model_path} into into AnnDatas..."
     )
