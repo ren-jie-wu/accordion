@@ -743,7 +743,7 @@ def add_argument(parser):
     parser.add_argument(
         "--gene-align-n-warmup",
         type=int,
-        default=10,
+        default=0,
         help="Number of epochs for gene alignment warmup",
     )
     parser.add_argument(
@@ -755,19 +755,19 @@ def add_argument(parser):
     parser.add_argument(
         "--ot-n-no",
         type=int,
-        default=15,
+        default=7,
         help="Number of epochs to wait before starting Optimal Transportation loss",
     )
     parser.add_argument(
         "--ot-n-warmup",
         type=int,
-        default=30,
+        default=7,
         help="Number of epochs for Optimal Transportation loss warmup",
     )
     parser.add_argument(
         "--ot-k",
         type=int,
-        default=256,
+        default=256, # depend on number of cells
         help="Subsample size for Optimal Transportation loss",
     )
     parser.add_argument(

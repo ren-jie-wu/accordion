@@ -490,18 +490,19 @@ class LightningProxModel(L.LightningModule):
             self._gene_pairs = TwoSampleGenePairs(idx0=self.gene_align_idx0, idx1=self.gene_align_idx1)
     
     def _register_ot_state(self):
-        # buffers for OT plan (NOT persistent: too big for checkpoints; recompute is fine)
-        self.register_buffer("ot_idx0", torch.empty(0, dtype=torch.long), persistent=False)
-        self.register_buffer("ot_idx1", torch.empty(0, dtype=torch.long), persistent=False)
-        self.register_buffer("ot_P", torch.empty(0), persistent=False)
-
-        # all cell indices per sample (small enough; can be persistent if you want)
-        self._cell_idx0_all = None
-        self._cell_idx1_all = None
-
         if self.lambda_ot > 0:
             if not hasattr(self.data["cell"], "sample"):
-                raise ValueError("lambda_ot>0 requires data['cell'].sample")
+                raise ValueError("lambda_ot > 0 requires data['cell'].sample")
+            
+            # buffers for OT plan (NOT persistent: too big for checkpoints; recompute is fine)
+            self.register_buffer("ot_idx0", torch.empty(0, dtype=torch.long), persistent=False)
+            self.register_buffer("ot_idx1", torch.empty(0, dtype=torch.long), persistent=False)
+            self.register_buffer("ot_P", torch.empty(0), persistent=False)
+
+            # all cell indices per sample (small enough; can be persistent if you want)
+            self._cell_idx0_all = None
+            self._cell_idx1_all = None
+
             idx0_all, idx1_all = build_two_sample_cell_index(self.data["cell"].sample)
             # keep on CPU for now; we'll move to device when computing OT
             self._cell_idx0_all = idx0_all

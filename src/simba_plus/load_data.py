@@ -323,6 +323,10 @@ def add_argument(parser):
 
 
 def main(args):
+    out_dir = os.path.dirname(args.out_path)
+    if not os.path.exists(out_dir):
+        os.makedirs(out_dir, exist_ok=True)
+    
     gene_paths = args.gene_adata
     if gene_paths is None or len(gene_paths) == 0:
         print("No gene adatas provided.")
@@ -341,6 +345,7 @@ def main(args):
         adata_CG_list=gene_adatas,
         cell_cat_cov_list=args.batch_col,
         n_dims=1, # since .x is deleted in train.py, this can be arbitrary
+        out_path=args.out_path,
     )
     
     # dat = make_sc_HetData(
@@ -348,9 +353,6 @@ def main(args):
     #     adata_CP=ad.read_h5ad(args.peak_adata) if args.peak_adata else None,
     #     cell_cat_cov=args.batch_col,
     # )
-    out_dir = os.path.dirname(args.out_path)
-    if not os.path.exists(out_dir):
-        os.makedirs(out_dir, exist_ok=True)
     torch.save(dat, args.out_path)
 
 
