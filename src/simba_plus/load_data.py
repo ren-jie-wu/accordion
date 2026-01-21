@@ -10,6 +10,7 @@ from simba_plus.utils import _make_tensor, is_integer_valued, _to_coo
 import argparse
 from typing import List, Optional
 import os
+import pickle
 
 def validate_input(adata_CG, adata_CP):
     """
@@ -147,6 +148,7 @@ def make_sc_HetData_multi_rna(
     adata_CG_list: Optional[List[Optional[ad.AnnData]]] = None,
     cell_cat_cov_list: Optional[List[Optional[str]]] = None,
     n_dims: int = 50,
+    out_path: str = None,
 ):
     """
     Construct a HeteroData object from multiple scRNA-seq datasets (cell-by-gene).
@@ -182,6 +184,13 @@ def make_sc_HetData_multi_rna(
     _align_gene_names(genes_list)
     union_genes = sorted(set().union(*[set(genes) for genes in genes_list if len(genes) > 0]))
     gene_to_id = {gene: i for i, gene in enumerate(union_genes)} # common gene names for future gene alignment use
+    
+    # ############ save union genes for future gene alignment use ############
+    # if out_path is not None:
+    #     out_dir = os.path.dirname(out_path)
+    #     prefix = os.path.basename(out_path).split("_hetdata.dat")[0]
+    #     with open(f"{out_dir}/{prefix}_union_genes.pkl", "wb") as f:
+    #         pickle.dump(union_genes, f)
     
     g_list = [adata.n_vars if adata is not None else 0 for adata in adata_CG_list]
     n_list = [adata.n_obs if adata is not None else 0 for adata in adata_CG_list]

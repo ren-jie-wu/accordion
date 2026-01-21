@@ -114,6 +114,7 @@ def run(
     load_checkpoint: bool = False,
     checkpoint_suffix: str = "",
     num_workers: int = 2,
+    lambda_kl: float = 0.05,
     n_no_kl: int = 0,
     n_kl_warmup: int = 10,
     hidden_dims: int = 50,
@@ -169,6 +170,7 @@ def run(
         
         # other parameters
         n_batch_sampling (int): Dummy parameter for now.
+        lambda_kl (float): The weight of the KL divergence loss.
         n_no_kl (int): ... passed to LightningProxModel.
         n_kl_warmup (int): ... passed to LightningProxModel.
         edgetype_specific (bool): Whether to use different parameters for the same node type but different edge types. Passed to LightningProxModel.
@@ -234,7 +236,7 @@ def run(
             checkpoint_suffix=checkpoint_suffix,
             logger=logger,
         )
-        last_model_path = f"{checkpoint_dir}/last{checkpoint_suffix}.ckpt"
+        last_model_path = get_last_model_path(checkpoint_dir, checkpoint_suffix)
         return last_model_path, logger
 
     edge_types = data.edge_types
@@ -264,15 +266,15 @@ def run(
     n_batches = math.ceil(pldata.train_loader.dataset.total_length / batch_size)
     logger.info(f"@N_BATCHES:{n_batches}")
     n_val_batches = math.ceil(pldata.val_loader.dataset.total_length / batch_size)
-    nll_scale, val_nll_scale = get_nll_scales(
-        data=data,
-        pldata=pldata,
-        edge_types=edge_types,
-        batch_size=batch_size,
-        n_batches=n_batches,
-        n_val_batches=n_val_batches,
-        logger=logger,
-    )
+    # nll_scale, val_nll_scale = get_nll_scales(
+    #     data=data,
+    #     pldata=pldata,
+    #     edge_types=edge_types,
+    #     batch_size=batch_size,
+    #     n_batches=n_batches,
+    #     n_val_batches=n_val_batches,
+    #     logger=logger,
+    # )
 
     # For now I skip the HSIC part and thus have not checked it. #TODO
     if hsic_lam != 0:
@@ -307,10 +309,11 @@ def run(
         hsic=hsic, # calculated
         herit_loss=herit_loss, # calculated
         herit_loss_lam=sumstats_lam,
+        lambda_kl=lambda_kl,
         n_no_kl=n_no_kl,
         n_kl_warmup=n_kl_warmup,
-        nll_scale=nll_scale, # calculated
-        val_nll_scale=val_nll_scale, # calculated
+        # nll_scale=nll_scale, # calculated
+        # val_nll_scale=val_nll_scale, # calculated
         node_weights_dict=node_weights_dict, # calculated
         nonneg=nonneg,
         logger=logger,
@@ -726,12 +729,18 @@ def add_argument(parser):
         action="store_true",
         help="Disable Weights & Biases logging (recommended for CI/tests).",
     )
+    parser.add_argument(
+        "--lambda-kl",
+        type=float,
+        default=0.05,
+        help="Weight of the KL divergence loss",
+    )
 
     # multi-align related parameters
     parser.add_argument(
         "--lambda-gene-align",
         type=float,
-        default=0.0,
+        default=0.0, # 0.0001
         help="Weight of the gene alignment loss",
     )
     parser.add_argument(
@@ -749,7 +758,7 @@ def add_argument(parser):
     parser.add_argument(
         "--lambda-ot",
         type=float,
-        default=0.0,
+        default=0.0, # 0.0001
         help="Weight of the Optimal Transportation loss (among cells)",
     )
     parser.add_argument(

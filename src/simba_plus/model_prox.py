@@ -14,6 +14,9 @@ from torch_geometric.utils import negative_sampling
 from simba_plus.encoders import TransEncoder
 from simba_plus.constants import MIN_LOGSTD, MAX_LOGSTD
 import warnings
+import pandas as pd
+import os
+from datetime import datetime
 
 # from simba_plus.utils import negative_sampling
 
@@ -373,10 +376,11 @@ class LightningProxModel(L.LightningModule):
         hsic: Optional[nn.Module] = None,
         herit_loss: Optional[nn.Module] = None,
         herit_loss_lam: float = 1,
+        lambda_kl: float = 0.05,
         n_no_kl: int = 30,
         n_kl_warmup: int = 50,
-        nll_scale: float = 1.0,
-        val_nll_scale: float = 1.0,
+        # nll_scale: float = 1.0,
+        # val_nll_scale: float = 1.0,
         learning_rate=1e-2,
         node_weights_dict=None,
         nonneg=False, #TODO: not used
@@ -420,10 +424,11 @@ class LightningProxModel(L.LightningModule):
             self.hsic_optimizer = torch.optim.Adam(
                 self.encoder.parameters(), lr=hsic.lam
             )
+        self.lambda_kl = lambda_kl
         self.n_no_kl = n_no_kl
         self.n_kl_warmup = n_kl_warmup
-        self.nll_scale = nll_scale
-        self.val_nll_scale = val_nll_scale
+        # self.nll_scale = nll_scale
+        # self.val_nll_scale = val_nll_scale
         # self.num_nodes_dict = data.num_nodes_dict
         self.cell_weights = torch.ones(data["cell"].num_nodes)
         self.reweight_rarecell = reweight_rarecell
@@ -436,11 +441,8 @@ class LightningProxModel(L.LightningModule):
         else:
             self.edge_types = edge_types
         self.edgetype_loss_weight_dict = {
-            edgetype: torch.tensor(
-                data.num_edges
-                / len(data.edge_types)  # mean $ edges
-                / len(data[edgetype].edge_index[0])
-            ) for edgetype in self.edge_types
+            edgetype: torch.tensor(1.0 / len(self.edge_types)) 
+            for edgetype in self.edge_types
         }
 
         self.node_weights_dict = node_weights_dict
@@ -648,15 +650,16 @@ class LightningProxModel(L.LightningModule):
         for edge_type, pos_dist in pos_dist_dict.items():
             src_type, _, dst_type = edge_type
             pos_edge_weights = pos_edge_weight_dict[edge_type]
-            pos_loss = -pos_dist.log_prob(pos_edge_weights).sum()
+            pos_loss = -pos_dist.log_prob(pos_edge_weights).mean()
             loss_dict[edge_type] = pos_loss
             if neg_sample:
                 neg_dist = neg_dist_dict[edge_type]
                 neg_edge_weights = torch.zeros(
                     neg_dist.event_shape, device=self.device
                 )
-                neg_loss = -neg_dist.log_prob(neg_edge_weights).sum()
+                neg_loss = -neg_dist.log_prob(neg_edge_weights).mean()
                 loss_dict[edge_type] += neg_loss
+                loss_dict[edge_type] *= torch.tensor(1.0 / (1.0 + self.num_neg_samples_fold), device=self.device)
 
         return loss_dict, neg_edge_index_dict, metric_dict
 
@@ -679,17 +682,17 @@ class LightningProxModel(L.LightningModule):
             weight (Tensor, optional): weights of each position in the tensor.
         """
 
-        def weighted_sum(x, w):
+        def weighted_mean(x, w):
             # if not w.any():
             #     return 0
             if w is None:
-                return x.sum()
-            return (x * w).sum()  # / w.long().sum()
+                return x.mean()
+            return (x * w).mean()  # / w.long().sum()
 
         mu = self.__mu__ if mu is None else mu
         logstd = self.__logstd__ if logstd is None else logstd
         kls = torch.sum(1 + 2 * logstd - mu**2 - logstd.exp() ** 2, dim=1)
-        return -0.5 * weighted_sum(kls, weight)
+        return -0.5 * weighted_mean(kls, weight)
 
     def relational_kl_divergence(
         self,
@@ -705,11 +708,10 @@ class LightningProxModel(L.LightningModule):
 
         """
         loss_dict = {}
+        if node_weights_dict is None:
+            node_weights_dict = {node_type: torch.ones(mu_dict[node_type].shape[0], device=self.device) for node_type in mu_dict.keys()}
         for node_type in mu_dict.keys():
-            if node_weights_dict is None:
-                weight = torch.ones(mu_dict[node_type].shape[0], device=self.device)
-            else:
-                weight = node_weights_dict[node_type][node_index_dict[node_type]]
+            weight = node_weights_dict[node_type][node_index_dict[node_type]]
             loss_dict[node_type] = self._kl_loss(
                 mu_dict[node_type], logstd_dict[node_type], weight
             )
@@ -736,12 +738,13 @@ class LightningProxModel(L.LightningModule):
             mu_dict, logstd_dict, node_index_dict, node_weights_dict=node_weights_dict
         )
         l = torch.tensor(0.0, device=self.device)
+        if nodetype_loss_weight_dict is None:
+            nodetype_loss_weight_dict = {node_type: torch.tensor(1.0 / len(kl_div_dict), device=self.device) for node_type in kl_div_dict.keys()}
+        else:
+            s = torch.stack([nodetype_loss_weight_dict[node_type] for node_type in kl_div_dict.keys()]).sum()
+            nodetype_loss_weight_dict = {node_type: nodetype_loss_weight_dict[node_type] / s for node_type in kl_div_dict.keys()}
         for node_type, kl_div in kl_div_dict.items():
-            if nodetype_loss_weight_dict:
-                nodetype_weight = nodetype_loss_weight_dict[node_type]
-            else:
-                nodetype_weight = 1.0
-            l += kl_div * nodetype_weight
+            l += kl_div * nodetype_loss_weight_dict[node_type]
         return l
 
     def nll_loss(
@@ -767,13 +770,14 @@ class LightningProxModel(L.LightningModule):
         )
         l = torch.tensor(0.0, device=self.device)
         weighted_nll_dict = {}
+        if edgetype_loss_weight_dict is None:
+            edgetype_loss_weight_dict = {edge_type: torch.tensor(1.0 / len(nll_dict), device=self.device) for edge_type in nll_dict.keys()}
+        else:
+            s = torch.stack([edgetype_loss_weight_dict[edge_type] for edge_type in nll_dict.keys()]).sum()
+            edgetype_loss_weight_dict = {edge_type: edgetype_loss_weight_dict[edge_type] / s for edge_type in nll_dict.keys()}
         for edge_type, nll in nll_dict.items():
-            if edgetype_loss_weight_dict:
-                edgetype_weight = edgetype_loss_weight_dict[edge_type]
-            else:
-                edgetype_weight = torch.tensor(1.0, device=self.device)
-            l += nll * edgetype_weight
-            weighted_nll_dict[edge_type] = nll * edgetype_weight
+            l += nll * edgetype_loss_weight_dict[edge_type]
+            weighted_nll_dict[edge_type] = nll * edgetype_loss_weight_dict[edge_type]
         return l, weighted_nll_dict, neg_edge_index_dict, metric_dict
 
     def gene_alignment_loss(self) -> torch.Tensor:        
@@ -819,7 +823,9 @@ class LightningProxModel(L.LightningModule):
             self._log_metric(f"nll/{edge_key}", nll_w, batch_size=edge_bs, on_step=False, on_epoch=True, prog_bar=False)
 
         # ---- KL ----
-        if self.current_epoch >= self.n_no_kl:
+        compute_kl_now, kl_weight = self._compute_kl_now(return_weight=True)
+        batch_kl_div_loss = torch.tensor(0.0, device=self.device)
+        if compute_kl_now:
             batch_kl_div_loss = self.kl_div_loss(
                 batch,
                 mu_dict,
@@ -827,16 +833,8 @@ class LightningProxModel(L.LightningModule):
                 batch.n_id_dict,
                 node_weights_dict=self.node_weights_dict,
             )
-            # aux_kl_div_loss = self.aux_params.kl_div_loss(batch, self.node_weights_dict)
-            t1 = time.time()
-            kl_scale = self._linear_warmup_scale(self.n_no_kl, self.n_kl_warmup)
-            # batch_kl_div_loss *= kl_scale
-        else:
-            batch_kl_div_loss = 0.0
-            kl_scale = 0.0
-        
-        self._log_metric("kl", batch_kl_div_loss, batch_size=bs_edges, on_step=True, on_epoch=True, prog_bar=False)
-        self._log_metric("kl_weighted", 1/self.nll_scale * kl_scale * batch_kl_div_loss, on_step=True, on_epoch=True, prog_bar=False)
+            self._log_metric("kl", batch_kl_div_loss, batch_size=bs_edges, on_step=True, on_epoch=True, prog_bar=False)
+            self._log_metric("kl_weighted", kl_weight * batch_kl_div_loss, on_step=True, on_epoch=True, prog_bar=False)
         
         # ---- Herit Loss ----
         if self.herit_loss is not None:
@@ -878,7 +876,7 @@ class LightningProxModel(L.LightningModule):
 
         loss = (
             batch_nll_loss
-            + 1/self.nll_scale * kl_scale * batch_kl_div_loss
+            + kl_weight * batch_kl_div_loss
             # + aux_kl_div_loss / self.nll_scale
             + herit_loss_value
             # + aux_reg_loss
@@ -894,6 +892,28 @@ class LightningProxModel(L.LightningModule):
             self._debug_embeddings_only(mu_dict, logstd_dict)
 
         self.local_step += 1
+
+        # if self.local_step == 1: #DEBUG
+        #     batch_edge_num = bs_edges
+        #     batch_cell_node_num = batch["cell"].num_nodes
+        #     batch_gene_node_num = batch["gene"].num_nodes
+        #     batch_total_nll = batch_nll_loss.item()
+        #     batch_total_kl = batch_kl_div_loss.item()
+        #     batch_kl_weight = kl_weight
+        #     batch_total_gene_align_loss = gene_align_loss.item()
+        #     batch_gene_align_weight = gene_align_weight
+        #     batch_total_ot_loss = ot_loss.item()
+        #     batch_ot_weight = ot_weight
+
+        #     self.logger2.info(
+        #         "\n\n"
+        #         f"Epoch {self.current_epoch}, Step {self.global_step} - TRAINING Batch Info: \n"
+        #         f"Edges: {batch_edge_num}, Cells: {batch_cell_node_num}, Genes: {batch_gene_node_num}, \n"
+        #         f"NLL: {batch_total_nll}, KL: {batch_total_kl} (weight: {batch_kl_weight}), \n"
+        #         f"Gene Align: {batch_total_gene_align_loss} (weight: {batch_gene_align_weight}), \n"
+        #         f"OT: {batch_total_ot_loss} (weight: {batch_ot_weight})"
+        #         "\n\n"
+        #     )
 
         return loss
 
@@ -1037,7 +1057,9 @@ class LightningProxModel(L.LightningModule):
             self._log_metric(f"nll/{edge_key}", nll_w, batch_size=edge_bs, on_step=False, on_epoch=True, prog_bar=False)
 
         # ---- KL ----
-        if self.current_epoch >= self.n_no_kl:
+        compute_kl_now, kl_weight = self._compute_kl_now(return_weight=True)
+        batch_kl_div_loss = torch.tensor(0.0, device=self.device)
+        if compute_kl_now:
             batch_kl_div_loss = self.kl_div_loss(
                 batch,
                 mu_dict,
@@ -1045,14 +1067,8 @@ class LightningProxModel(L.LightningModule):
                 batch.n_id_dict,
                 node_weights_dict=self.node_weights_dict,
             )
-            kl_scale = self._linear_warmup_scale(self.n_no_kl, self.n_kl_warmup)
-            # batch_kl_div_loss *= kl_scale
-        else:
-            batch_kl_div_loss = 0.0
-            kl_scale = 0.0
-        
-        self._log_metric("kl", batch_kl_div_loss, batch_size=bs_edges, on_step=False, on_epoch=True, prog_bar=False)
-        self._log_metric("kl_weighted", 1/self.val_nll_scale * kl_scale * batch_kl_div_loss, on_step=False, on_epoch=True, prog_bar=False)
+            self._log_metric("kl", batch_kl_div_loss, batch_size=bs_edges, on_step=False, on_epoch=True, prog_bar=False)
+            self._log_metric("kl_weighted", kl_weight * batch_kl_div_loss, on_step=False, on_epoch=True, prog_bar=False)
 
         # ---- Herit Loss ----
         if self.herit_loss is not None:
@@ -1088,7 +1104,7 @@ class LightningProxModel(L.LightningModule):
        
         loss = (
             batch_nll_loss + 
-            1/self.val_nll_scale * kl_scale * batch_kl_div_loss + 
+            kl_weight * batch_kl_div_loss + 
             herit_loss_value
             + gene_align_weight * gene_align_loss
             + ot_weight * ot_loss
@@ -1098,6 +1114,29 @@ class LightningProxModel(L.LightningModule):
 
         self.validation_step_outputs.append(loss)
         self.local_step_val += 1
+
+        # if self.local_step_val == 1: #DEBUG
+        #     batch_edge_num = bs_edges
+        #     batch_cell_node_num = batch["cell"].num_nodes
+        #     batch_gene_node_num = batch["gene"].num_nodes
+        #     batch_total_nll = batch_nll_loss.item()
+        #     batch_total_kl = batch_kl_div_loss.item()
+        #     batch_kl_weight = kl_weight
+        #     batch_total_gene_align_loss = gene_align_loss.item()
+        #     batch_gene_align_weight = gene_align_weight
+        #     batch_total_ot_loss = ot_loss.item()
+        #     batch_ot_weight = ot_weight
+
+        #     self.logger2.info(
+        #         "\n\n"
+        #         f"Epoch {self.current_epoch}, Step {self.global_step} - VALIDATION Batch Info: \n"
+        #         f"Edges: {batch_edge_num}, Cells: {batch_cell_node_num}, Genes: {batch_gene_node_num}, \n"
+        #         f"NLL: {batch_total_nll}, KL: {batch_total_kl} (weight: {batch_kl_weight}), \n"
+        #         f"Gene Align: {batch_total_gene_align_loss} (weight: {batch_gene_align_weight}), \n"
+        #         f"OT: {batch_total_ot_loss} (weight: {batch_ot_weight})"
+        #         "\n\n"
+        #     )
+        
         return loss
 
     def mean_cell_neighbor_distance(self, k=50):
@@ -1117,11 +1156,20 @@ class LightningProxModel(L.LightningModule):
         weights = mean_distances / mean_distances.mean()
         return weights  # shape: (num_cells,)
     
+    def _compute_kl_now(self, return_weight=False):
+        """Decide whether to compute KL loss for this training/validation step."""
+        kl_weight = self.lambda_kl * self._linear_warmup_scale(self.n_no_kl, self.n_kl_warmup)
+        compute_kl_now = kl_weight > 0
+        if return_weight:
+            return compute_kl_now, kl_weight
+        else:
+            return compute_kl_now
+    
     def _compute_gene_align_now(self, return_weight=False):
         """Decide whether to compute gene alignment loss for this training/validation step."""
         gene_align_weight = self.lambda_gene_align * self._linear_warmup_scale(self.gene_align_n_no, self.gene_align_n_warmup)
         compute_gene_align_now = False
-        if gene_align_weight > 0 and self._gene_pairs is not None:
+        if gene_align_weight > 0 and hasattr(self, "_gene_pairs") and self._gene_pairs is not None:
             compute_gene_align_now = True
         if return_weight:
             return compute_gene_align_now, gene_align_weight
@@ -1204,6 +1252,42 @@ class LightningProxModel(L.LightningModule):
 
     def on_validation_epoch_start(self):
         self.local_step_val = 0
+    
+    # def on_validation_epoch_end(self):
+    #     # record distance for each gene pair
+    #     pairs = self._gene_pairs if hasattr(self, "_gene_pairs") else None
+    #     if pairs is not None and hasattr(pairs, "idx0") and pairs.idx0 is not None:
+    #         gene_mu = self.encoder.__mu_dict__["gene"]
+    #         gene_id = self.data["gene"].gene_id[pairs.idx0]
+    #         dist = (gene_mu[pairs.idx0] - gene_mu[pairs.idx1]).pow(2).sum(dim=-1).sqrt()
+
+    #         gene_id = gene_id.detach().cpu().numpy()
+    #         dist = dist.detach().cpu().numpy()
+
+    #         col = f"dist_{self.current_epoch}"
+    #         if not hasattr(self, "_gene_align_dist_cols"):
+    #             self._gene_align_dist_cols = {}
+            
+    #         self._gene_align_dist_cols[col] = pd.Series(dist, index=gene_id, name=col)
+
+    # def on_fit_end(self):
+    #     if not hasattr(self, "_gene_align_dist_cols"):
+    #         return
+    #     df = pd.concat(self._gene_align_dist_cols.values(), axis=1)
+
+    #     log_dir = None
+    #     if self.trainer is not None:
+    #         log_dir = getattr(self.trainer, "log_dir", None)
+    #     if log_dir is None and getattr(self, "logger", None) is not None:
+    #         log_dir = getattr(self.logger, "log_dir", None)
+    #     if log_dir is None:
+    #         log_dir = "."
+        
+    #     os.makedirs(log_dir, exist_ok=True)
+    #     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    #     filename = os.path.join(log_dir, f"gene_align_dist_df_{timestamp}.csv")
+    #     df.to_csv(filename)
+    #     self.logger2.info(f"Gene alignment distance dataframe saved to {filename}")
 
     def configure_optimizers(self):
         # Different learning rates for encoder vs aux_params
