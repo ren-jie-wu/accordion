@@ -40,7 +40,8 @@ usage: simba+ train [-h] [--adata-CG ADATA_CG] [--adata-CP ADATA_CP]
                     [--get-adata] [--num-workers NUM_WORKERS]
                     [--early-stopping-steps EARLY_STOPPING_STEPS]
                     [--max-epochs MAX_EPOCHS] [--verbose] [--no-wandb]
-                    [--kl-lambda KL_LAMBDA]
+                    [--kl-lambda KL_LAMBDA] [--kl-n-no KL_N_NO]
+                    [--kl-n-warmup KL_N_WARMUP]
                     [--gene-align-lambda GENE_ALIGN_LAMBDA]
                     [--gene-align-n-no GENE_ALIGN_N_NO]
                     [--gene-align-n-warmup GENE_ALIGN_N_WARMUP]
@@ -98,6 +99,10 @@ options:
                         CI/tests).
   --kl-lambda KL_LAMBDA
                         Weight of the KL divergence loss
+  --kl-n-no KL_N_NO     Number of epochs to wait before starting KL divergence
+                        loss
+  --kl-n-warmup KL_N_WARMUP
+                        Number of epochs for KL divergence loss warmup
   --gene-align-lambda GENE_ALIGN_LAMBDA
                         Weight of the gene alignment loss
   --gene-align-n-no GENE_ALIGN_N_NO
