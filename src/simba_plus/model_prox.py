@@ -106,8 +106,8 @@ class AuxParams(nn.Module):
             [
                 "cell__cell_expresses_gene",      # value shape: (num_cells,)
                 "cell__cell_has_accessible_peak", # value shape: (num_cells,)
-                "gene__cell_expresses_gene",      # value shape: (num_genes, num_batches) if use_batch else (num_genes,)
-                "peak__cell_has_accessible_peak"  # value shape: (num_peaks, num_batches) if use_batch else (num_peaks,)
+                "gene__cell_expresses_gene",      # value shape: (num_batches, num_genes) if use_batch else (num_genes,)
+                "peak__cell_has_accessible_peak"  # value shape: (num_batches, num_peaks) if use_batch else (num_peaks,)
             ]
             But for *_logstd_dict, there is only destination node type in the key.
             [
@@ -232,6 +232,7 @@ class AuxParams(nn.Module):
             Stochastic parameters, shape: (num_batches, num_nodes)
         """
         if self.training and self.use_batch:
+            assert param.dim() == 2, f"param must be a 2D tensor when use_batch is True, but got {param.dim()}D tensor"
             if param.size(0) <= 1:
                 return param
             return_param = torch.cat(
@@ -260,6 +261,7 @@ class AuxParams(nn.Module):
         device = edge_index.device
         num_edges = edge_index.size(1)
 
+        # not use_batch
         if not self.use_batch:
             dst_global = batch[dst_type].n_id[edge_index[1]]
             if which == "logscale":
@@ -270,7 +272,7 @@ class AuxParams(nn.Module):
                 return self.std_dict[dst_key][dst_global]
             raise ValueError(f"Unknown which={which}")
 
-        # use_batch == True
+        # use_batch and multi_sample
         if self.multi_sample:
             # Per-sample: index by (cell.sample, cell.batch_local, dst.local_id)
             samples = batch["cell"].sample[edge_index[0]].long()
@@ -298,7 +300,7 @@ class AuxParams(nn.Module):
                 out[mask] = p_eff[b_local[mask], dst_local[mask]].to(out.dtype)
             return out
 
-        # Legacy global batched dst params: index by global batch (prefer batch_local if exists)
+        # use_batch and not multi_sample
         dst_global = batch[dst_type].n_id[edge_index[1]]
         _batch = batch["cell"].batch if hasattr(batch["cell"], "batch") else batch["cell"].batch_local
         b = _batch[edge_index[0]].long()
