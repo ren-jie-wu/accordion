@@ -729,11 +729,24 @@ def add_argument(parser):
         action="store_true",
         help="Disable Weights & Biases logging (recommended for CI/tests).",
     )
+    # kl divergence related parameters
     parser.add_argument(
         "--kl-lambda",
         type=float,
         default=0.05,
         help="Weight of the KL divergence loss",
+    )
+    parser.add_argument(
+        "--kl-n-no",
+        type=int,
+        default=0,
+        help="Number of epochs to wait before starting KL divergence loss",
+    )
+    parser.add_argument(
+        "--kl-n-warmup",
+        type=int,
+        default=10,
+        help="Number of epochs for KL divergence loss warmup",
     )
 
     # multi-align related parameters
