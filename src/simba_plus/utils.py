@@ -438,6 +438,7 @@ def get_node_weights(
     return node_weights_dict
 
 
+# deprecated function
 def get_nll_scales(
     data,
     pldata,
@@ -473,7 +474,7 @@ def get_nll_scales(
     Notes
     -----
     Previous version in fact scale with only positive edges, thus this is set as default. 
-    Consider changing default to False in the future. #TODO
+    Consider changing default to False in the future.
     """
     n_dense_edges = 0
     for src_nodetype, _, dst_nodetype in edge_types:

@@ -12,6 +12,7 @@ from typing import List, Optional
 import os
 import pickle
 
+# deprecated
 def validate_input(adata_CG, adata_CP):
     """
     Validate and extract dimensions from input AnnData objects.
@@ -42,12 +43,14 @@ def validate_input(adata_CG, adata_CP):
     return n_cells, n_genes, n_peaks, n_motifs
 
 
+# deprecated
 def type_attribute(data):
     for node_type in data.node_types:
         data[node_type].x = torch.tensor(data[node_type].x, dtype=torch.float)
     return data
 
 
+# deprecated
 def make_sc_HetData(
     adata_CG: ad.AnnData = None,
     adata_CP: ad.AnnData = None,
@@ -128,11 +131,23 @@ def make_sc_HetData(
     return data
 
 
-def _align_gene_names(genes_list: List[List[str]]): #TODO
+def _align_gene_names(genes_list: List[List[str]], threshold: float = 0.05): #TODO: more robust alignment
     """
     Align the gene names of the multiple RNA-seq datasets in case they use different naming systems.
+    Check if the overlap ratio between the gene names of the datasets is less than threshold.
     """
-    pass #TODO
+    def norm(g: str) -> str:
+        return g.upper().replace("-", "_").replace(".", "_").strip()
+    
+    for i in range(len(genes_list)):
+        genes_list[i] = list(map(norm, genes_list[i]))
+
+    # check overlap percentage
+    for i in range(len(genes_list)):
+        for j in range(i+1, len(genes_list)):
+            overlap_ratio = len(set(genes_list[i]) & set(genes_list[j])) / len(set(genes_list[i]) | set(genes_list[j]))
+            if overlap_ratio < threshold:
+                raise ValueError(f"The overlap ratio between the gene names of the {i}th and {j}th datasets is less than {threshold}")
 
 
 def _check_no_duplicates(*genes_list: List[List[str]], name="RNA"):
@@ -162,6 +177,10 @@ def make_sc_HetData_multi_rna(
     - For batch correction:
         * `data["cell"].batch_local`: per-sample batch ids (0..B_s-1)
         * `data["cell"].batch`: global batch ids with offsets, unique across samples
+    - For future multi-modal extension: #TODO
+        adata list for all modalities should align (same list length, same order, same cell number and ids)
+        data["cell"].sample code should be consecutive (0, ..., S-1), yet data[feature].sample code can be non-consecutive (subset of cell sample codes)
+        Similarly, data["cell"].batch code should be consecutive, and data["cell"].batch_local code should be consecutive within each sample
     """
 
     if adata_CG_list is None or \

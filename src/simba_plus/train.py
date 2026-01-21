@@ -90,12 +90,12 @@ def get_run_id(
     hidden_dims: int = 50,
     hsic_lam: float = 0.0,
     edgetype_specific: bool = True,
-    nonneg: bool = False,
+    # nonneg: bool = False,
     sumstats: Optional[str] = None,
     sumstats_lam: float = 1.0,
     **kwargs,
 ):
-    return f"simba+{os.path.basename(data_path).split('_hetdata.dat')[0]}_{human_format(batch_size)}{'x'+str(n_batch_sampling) if n_batch_sampling > 1 else ''}{'.indep2_' + format(hsic_lam, '1.0e') if hsic_lam != 0 else ''}{os.path.basename(sumstats).split('.txt')[0] if sumstats is not None else ''}{'_'+format(sumstats_lam, '1.0e') if sumstats is not None and sumstats_lam != 1.0 else ''}{'.d' + str(hidden_dims) if hidden_dims != 50 else ''}{'.en' if not edgetype_specific else ''}{'.nn' if nonneg else ''}.randinit"
+    return f"simba+{os.path.basename(data_path).split('_hetdata.dat')[0]}_{human_format(batch_size)}{'x'+str(n_batch_sampling) if n_batch_sampling > 1 else ''}{'.indep2_' + format(hsic_lam, '1.0e') if hsic_lam != 0 else ''}{os.path.basename(sumstats).split('.txt')[0] if sumstats is not None else ''}{'_'+format(sumstats_lam, '1.0e') if sumstats is not None and sumstats_lam != 1.0 else ''}{'.d' + str(hidden_dims) if hidden_dims != 50 else ''}{'.en' if not edgetype_specific else ''}.randinit"
 
 
 def get_last_model_path(checkpoint_dir, checkpoint_suffix="") -> str:
@@ -120,7 +120,7 @@ def run(
     hidden_dims: int = 50,
     hsic_lam: float = 0.0,
     edgetype_specific: bool = True,
-    nonneg: bool = False,
+    # nonneg: bool = False,
     adata_CG: str = None,
     adata_CP: str = None,
     get_adata: bool = False,
@@ -174,7 +174,6 @@ def run(
         kl_n_no (int): ... passed to LightningProxModel.
         kl_n_warmup (int): ... passed to LightningProxModel.
         edgetype_specific (bool): Whether to use different parameters for the same node type but different edge types. Passed to LightningProxModel.
-        nonneg (bool): Passed to LightningProxModel but not used for now.
         ldsc_res (pd.DataFrame): per-SNP LD score regression residuals from get_residual(). Used to promote peak loading explaining GWAS residual.
         
         # multi-align related parameters
@@ -201,7 +200,7 @@ def run(
         hidden_dims=hidden_dims,
         hsic_lam=hsic_lam,
         edgetype_specific=edgetype_specific,
-        nonneg=nonneg,
+        # nonneg=nonneg,
         sumstats=sumstats,
         sumstats_lam=sumstats_lam,
     )
@@ -240,8 +239,8 @@ def run(
         return last_model_path, logger
 
     edge_types = data.edge_types
-    if "peak" in data.node_types and "gene" in data.node_types:
-        edge_types = [("cell", "has_accessible", "peak"), ("cell", "expresses", "gene")]
+    # if "peak" in data.node_types and "gene" in data.node_types:
+    #     edge_types = [("cell", "has_accessible", "peak"), ("cell", "expresses", "gene")]
 
     # construct train/val dataloaders; batch_negative=True won't do negative sampling
     pldata = get_edge_split_datamodule(
@@ -306,16 +305,16 @@ def run(
         n_latent_dims=dim_u,
         device=device,
         edgetype_specific=edgetype_specific,
-        hsic=hsic, # calculated
-        herit_loss=herit_loss, # calculated
+        hsic=hsic,
+        herit_loss=herit_loss,
         herit_loss_lam=sumstats_lam,
         kl_lambda=kl_lambda,
         kl_n_no=kl_n_no,
         kl_n_warmup=kl_n_warmup,
-        # nll_scale=nll_scale, # calculated
-        # val_nll_scale=val_nll_scale, # calculated
-        node_weights_dict=node_weights_dict, # calculated
-        nonneg=nonneg,
+        # nll_scale=nll_scale,
+        # val_nll_scale=val_nll_scale,
+        node_weights_dict=node_weights_dict,
+        # nonneg=nonneg,
         logger=logger,
         verbose=verbose,
         num_neg_samples_fold=negative_sampling_fold,
