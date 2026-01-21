@@ -618,6 +618,19 @@ class LightningProxModel(L.LightningModule):
         # self.nonneg = nonneg
         self.data = data
         self.logger2 = logger
+
+        class _logger:
+            def __init__(self):
+                pass
+            def info(self, msg, *args, **kwargs):
+                print(msg)
+            def warning(self, msg, *args, **kwargs):
+                print(msg)
+            def error(self, msg, *args, **kwargs):
+                print(msg)
+        
+        if self.logger2 is None:
+            self.logger2 = _logger() # fallback to print
         
         checker = _CheckHeteroDataCodes()
         ok, msgs = checker.check_heterodata(data)
