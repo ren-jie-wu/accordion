@@ -40,6 +40,7 @@ usage: simba+ train [-h] [--adata-CG ADATA_CG] [--adata-CP ADATA_CP]
                     [--get-adata] [--num-workers NUM_WORKERS]
                     [--early-stopping-steps EARLY_STOPPING_STEPS]
                     [--max-epochs MAX_EPOCHS] [--verbose] [--no-wandb]
+                    [--kl-lambda KL_LAMBDA]
                     [--gene-align-lambda GENE_ALIGN_LAMBDA]
                     [--gene-align-n-no GENE_ALIGN_N_NO]
                     [--gene-align-n-warmup GENE_ALIGN_N_WARMUP]
@@ -95,6 +96,8 @@ options:
   --verbose             If set, enables verbose logging
   --no-wandb            Disable Weights & Biases logging (recommended for
                         CI/tests).
+  --kl-lambda KL_LAMBDA
+                        Weight of the KL divergence loss
   --gene-align-lambda GENE_ALIGN_LAMBDA
                         Weight of the gene alignment loss
   --gene-align-n-no GENE_ALIGN_N_NO
