@@ -21,7 +21,7 @@ from datetime import datetime
 # from simba_plus.utils import negative_sampling
 
 # from torch_geometric.utils import negative_sampling
-from simba_plus.losses import bernoulli_kl_loss
+from simba_plus.loss.hsic import bernoulli_kl_loss
 from simba_plus.decoders import RelationalEdgeDistributionDecoder
 import time
 from simba_plus._utils import (

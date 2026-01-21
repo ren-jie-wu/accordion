@@ -30,7 +30,7 @@ import wandb
 import scanpy as sc
 import simba_plus.load_data
 from simba_plus.encoders import TransEncoder
-from simba_plus.losses import HSIC, SumstatResidualLoss
+from simba_plus.loss.hsic import HSIC, SumstatResidualLoss
 
 from simba_plus.utils import (
     MyEarlyStopping,
@@ -730,7 +730,7 @@ def add_argument(parser):
         help="Disable Weights & Biases logging (recommended for CI/tests).",
     )
     parser.add_argument(
-        "--lambda-kl",
+        "--kl-lambda",
         type=float,
         default=0.05,
         help="Weight of the KL divergence loss",
@@ -738,7 +738,7 @@ def add_argument(parser):
 
     # multi-align related parameters
     parser.add_argument(
-        "--lambda-gene-align",
+        "--gene-align-lambda",
         type=float,
         default=0.0, # 0.0001
         help="Weight of the gene alignment loss",
@@ -756,7 +756,7 @@ def add_argument(parser):
         help="Number of epochs for gene alignment warmup",
     )
     parser.add_argument(
-        "--lambda-ot",
+        "--ot-lambda",
         type=float,
         default=0.0, # 0.0001
         help="Weight of the Optimal Transportation loss (among cells)",

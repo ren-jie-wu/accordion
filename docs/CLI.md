@@ -40,10 +40,10 @@ usage: simba+ train [-h] [--adata-CG ADATA_CG] [--adata-CP ADATA_CP]
                     [--get-adata] [--num-workers NUM_WORKERS]
                     [--early-stopping-steps EARLY_STOPPING_STEPS]
                     [--max-epochs MAX_EPOCHS] [--verbose] [--no-wandb]
-                    [--lambda-gene-align LAMBDA_GENE_ALIGN]
+                    [--gene-align-lambda GENE_ALIGN_LAMBDA]
                     [--gene-align-n-no GENE_ALIGN_N_NO]
                     [--gene-align-n-warmup GENE_ALIGN_N_WARMUP]
-                    [--lambda-ot LAMBDA_OT] [--ot-n-no OT_N_NO]
+                    [--ot-lambda OT_LAMBDA] [--ot-n-no OT_N_NO]
                     [--ot-n-warmup OT_N_WARMUP] [--ot-k OT_K]
                     [--ot-eps OT_EPS] [--ot-iter OT_ITER]
                     data_path
@@ -95,14 +95,14 @@ options:
   --verbose             If set, enables verbose logging
   --no-wandb            Disable Weights & Biases logging (recommended for
                         CI/tests).
-  --lambda-gene-align LAMBDA_GENE_ALIGN
+  --gene-align-lambda GENE_ALIGN_LAMBDA
                         Weight of the gene alignment loss
   --gene-align-n-no GENE_ALIGN_N_NO
                         Number of epochs to wait before starting gene
                         alignment
   --gene-align-n-warmup GENE_ALIGN_N_WARMUP
                         Number of epochs for gene alignment warmup
-  --lambda-ot LAMBDA_OT
+  --ot-lambda OT_LAMBDA
                         Weight of the Optimal Transportation loss (among
                         cells)
   --ot-n-no OT_N_NO     Number of epochs to wait before starting Optimal
