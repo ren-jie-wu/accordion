@@ -114,9 +114,9 @@ def run(
     load_checkpoint: bool = False,
     checkpoint_suffix: str = "",
     num_workers: int = 2,
-    lambda_kl: float = 0.05,
-    n_no_kl: int = 0,
-    n_kl_warmup: int = 10,
+    kl_lambda: float = 0.05,
+    kl_n_no: int = 0,
+    kl_n_warmup: int = 10,
     hidden_dims: int = 50,
     hsic_lam: float = 0.0,
     edgetype_specific: bool = True,
@@ -134,10 +134,10 @@ def run(
     batch_negative: bool = True,
     no_wandb: bool = False,
 
-    lambda_gene_align: float = 0.0,
+    gene_align_lambda: float = 0.0,
     gene_align_n_no: int = 0,
     gene_align_n_warmup: int = 10,
-    lambda_ot: float = 0.0,
+    ot_lambda: float = 0.0,
     ot_n_no: int = 15,
     ot_n_warmup: int = 30,
     ot_k: int = 256,
@@ -170,18 +170,18 @@ def run(
         
         # other parameters
         n_batch_sampling (int): Dummy parameter for now.
-        lambda_kl (float): The weight of the KL divergence loss.
-        n_no_kl (int): ... passed to LightningProxModel.
-        n_kl_warmup (int): ... passed to LightningProxModel.
+        kl_lambda (float): The weight of the KL divergence loss.
+        kl_n_no (int): ... passed to LightningProxModel.
+        kl_n_warmup (int): ... passed to LightningProxModel.
         edgetype_specific (bool): Whether to use different parameters for the same node type but different edge types. Passed to LightningProxModel.
         nonneg (bool): Passed to LightningProxModel but not used for now.
         ldsc_res (pd.DataFrame): per-SNP LD score regression residuals from get_residual(). Used to promote peak loading explaining GWAS residual.
         
         # multi-align related parameters
-        lambda_gene_align (float): Weight of the gene alignment loss.
+        gene_align_lambda (float): Weight of the gene alignment loss.
         gene_align_n_no (int): Number of epochs to wait before starting gene alignment.
         gene_align_n_warmup (int): Number of epochs for gene alignment warmup.
-        lambda_ot (float): Weight of the Optimal Transportation loss (among cells).
+        ot_lambda (float): Weight of the Optimal Transportation loss (among cells).
         ot_n_no (int): Number of epochs to wait before starting Optimal Transportation loss.
         ot_n_warmup (int): Number of epochs for Optimal Transportation loss warmup.
         ot_k (int): Number of cells to sample for Optimal Transportation loss.
@@ -309,9 +309,9 @@ def run(
         hsic=hsic, # calculated
         herit_loss=herit_loss, # calculated
         herit_loss_lam=sumstats_lam,
-        lambda_kl=lambda_kl,
-        n_no_kl=n_no_kl,
-        n_kl_warmup=n_kl_warmup,
+        kl_lambda=kl_lambda,
+        kl_n_no=kl_n_no,
+        kl_n_warmup=kl_n_warmup,
         # nll_scale=nll_scale, # calculated
         # val_nll_scale=val_nll_scale, # calculated
         node_weights_dict=node_weights_dict, # calculated
@@ -322,10 +322,10 @@ def run(
         batch_negative=batch_negative,
         monitor_key=MONITOR_KEY,
 
-        lambda_gene_align=lambda_gene_align,
+        gene_align_lambda=gene_align_lambda,
         gene_align_n_no=gene_align_n_no,
         gene_align_n_warmup=gene_align_n_warmup,
-        lambda_ot=lambda_ot,
+        ot_lambda=ot_lambda,
         ot_n_no=ot_n_no,
         ot_n_warmup=ot_n_warmup,
         ot_k=ot_k,
@@ -351,8 +351,8 @@ def run(
                 {
                     "run_id": run_id,
                     "batch_size": batch_size,
-                    "n_no_kl": n_no_kl,
-                    "n_kl_warmup": n_kl_warmup,
+                    "kl_n_no": kl_n_no,
+                    "kl_n_warmup": kl_n_warmup,
                     "early_stopping_steps": early_stopping_steps,
                     "HSIC_loss": hsic_lam,
                     "negative_sampling_fold": negative_sampling_fold,

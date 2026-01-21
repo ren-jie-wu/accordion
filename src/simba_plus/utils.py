@@ -49,7 +49,7 @@ class MyEarlyStopping(EarlyStopping):
 
     def on_validation_end(self, trainer, pl_module):
         # override this to disable early stopping at the end of val loop
-        if trainer.current_epoch > pl_module.n_kl_warmup * 2:
+        if trainer.current_epoch > pl_module.kl_n_warmup * 2:
             self._run_early_stopping_check(trainer)
         else:
             self.wait_count = 0

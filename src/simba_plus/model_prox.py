@@ -376,9 +376,9 @@ class LightningProxModel(L.LightningModule):
         hsic: Optional[nn.Module] = None,
         herit_loss: Optional[nn.Module] = None,
         herit_loss_lam: float = 1,
-        lambda_kl: float = 0.05,
-        n_no_kl: int = 30,
-        n_kl_warmup: int = 50,
+        kl_lambda: float = 0.05,
+        kl_n_no: int = 30,
+        kl_n_warmup: int = 50,
         # nll_scale: float = 1.0,
         # val_nll_scale: float = 1.0,
         learning_rate=1e-2,
@@ -390,10 +390,10 @@ class LightningProxModel(L.LightningModule):
         batch_negative: bool = False, # make the default same as in the CLI
         monitor_key: str = None,
 
-        lambda_gene_align: float = 0.0,
+        gene_align_lambda: float = 0.0,
         gene_align_n_no: int = 0,
         gene_align_n_warmup: int = 10,
-        lambda_ot: float = 0.0,
+        ot_lambda: float = 0.0,
         ot_n_no: int = 15,
         ot_n_warmup: int = 30,
         ot_k: int = 256,
@@ -424,9 +424,9 @@ class LightningProxModel(L.LightningModule):
             self.hsic_optimizer = torch.optim.Adam(
                 self.encoder.parameters(), lr=hsic.lam
             )
-        self.lambda_kl = lambda_kl
-        self.n_no_kl = n_no_kl
-        self.n_kl_warmup = n_kl_warmup
+        self.kl_lambda = kl_lambda
+        self.kl_n_no = kl_n_no
+        self.kl_n_warmup = kl_n_warmup
         # self.nll_scale = nll_scale
         # self.val_nll_scale = val_nll_scale
         # self.num_nodes_dict = data.num_nodes_dict
@@ -457,10 +457,10 @@ class LightningProxModel(L.LightningModule):
 
         self.monitor_key = monitor_key
 
-        self.lambda_gene_align = lambda_gene_align
+        self.gene_align_lambda = gene_align_lambda
         self.gene_align_n_no = gene_align_n_no
         self.gene_align_n_warmup = gene_align_n_warmup
-        self.lambda_ot = lambda_ot
+        self.ot_lambda = ot_lambda
         self.ot_n_no = ot_n_no
         self.ot_n_warmup = ot_n_warmup
         self.ot_k = ot_k
@@ -475,10 +475,10 @@ class LightningProxModel(L.LightningModule):
     
     def _register_gene_pairs(self):
         self._gene_pairs: TwoSampleGenePairs | None = None
-        if self.lambda_gene_align > 0:
+        if self.gene_align_lambda > 0:
             if not (hasattr(self.data["gene"], "sample") and hasattr(self.data["gene"], "gene_id")):
                 raise ValueError(
-                    "lambda_gene_align > 0 requires data['gene'].sample and data['gene'].gene_id "
+                    "gene_align_lambda > 0 requires data['gene'].sample and data['gene'].gene_id "
                     "(constructed in make_sc_HetData_multi_rna)."
                 )
             
@@ -492,9 +492,9 @@ class LightningProxModel(L.LightningModule):
             self._gene_pairs = TwoSampleGenePairs(idx0=self.gene_align_idx0, idx1=self.gene_align_idx1)
     
     def _register_ot_state(self):
-        if self.lambda_ot > 0:
+        if self.ot_lambda > 0:
             if not hasattr(self.data["cell"], "sample"):
-                raise ValueError("lambda_ot > 0 requires data['cell'].sample")
+                raise ValueError("ot_lambda > 0 requires data['cell'].sample")
             
             # buffers for OT plan (NOT persistent: too big for checkpoints; recompute is fine)
             self.register_buffer("ot_idx0", torch.empty(0, dtype=torch.long), persistent=False)
@@ -578,7 +578,7 @@ class LightningProxModel(L.LightningModule):
         assert mu_dict.keys() == logstd_dict.keys()
         for node_type in mu_dict.keys():
             if (
-                self.training and self.current_epoch > self.n_no_kl
+                self.training and self.current_epoch > self.kl_n_no
             ):  # Start reparameterization later
                 out_dict[node_type] = mu_dict[node_type] + torch.randn_like(
                     logstd_dict[node_type]
@@ -1136,7 +1136,7 @@ class LightningProxModel(L.LightningModule):
         #         f"OT: {batch_total_ot_loss} (weight: {batch_ot_weight})"
         #         "\n\n"
         #     )
-        
+
         return loss
 
     def mean_cell_neighbor_distance(self, k=50):
@@ -1158,7 +1158,7 @@ class LightningProxModel(L.LightningModule):
     
     def _compute_kl_now(self, return_weight=False):
         """Decide whether to compute KL loss for this training/validation step."""
-        kl_weight = self.lambda_kl * self._linear_warmup_scale(self.n_no_kl, self.n_kl_warmup)
+        kl_weight = self.kl_lambda * self._linear_warmup_scale(self.kl_n_no, self.kl_n_warmup)
         compute_kl_now = kl_weight > 0
         if return_weight:
             return compute_kl_now, kl_weight
@@ -1167,7 +1167,7 @@ class LightningProxModel(L.LightningModule):
     
     def _compute_gene_align_now(self, return_weight=False):
         """Decide whether to compute gene alignment loss for this training/validation step."""
-        gene_align_weight = self.lambda_gene_align * self._linear_warmup_scale(self.gene_align_n_no, self.gene_align_n_warmup)
+        gene_align_weight = self.gene_align_lambda * self._linear_warmup_scale(self.gene_align_n_no, self.gene_align_n_warmup)
         compute_gene_align_now = False
         if gene_align_weight > 0 and hasattr(self, "_gene_pairs") and self._gene_pairs is not None:
             compute_gene_align_now = True
@@ -1177,7 +1177,7 @@ class LightningProxModel(L.LightningModule):
             return compute_gene_align_now
 
     def _compute_ot_plan(self):
-        if self.lambda_ot > 0:
+        if self.ot_lambda > 0:
             # No need to calculate OT plan when weight = 0
             ot_scale = self._linear_warmup_scale(self.ot_n_no, self.ot_n_warmup)
             need_plan = (ot_scale > 0) and (self.current_epoch % self.ot_plan_every_n_epochs == 0)
@@ -1211,7 +1211,7 @@ class LightningProxModel(L.LightningModule):
 
     def _compute_ot_now(self, return_weight=False):
         """Decide whether to compute OT loss for this training/validation step."""
-        ot_weight = self.lambda_ot * self._linear_warmup_scale(self.ot_n_no, self.ot_n_warmup)
+        ot_weight = self.ot_lambda * self._linear_warmup_scale(self.ot_n_no, self.ot_n_warmup)
         compute_ot_now = False
         if ot_weight > 0 and self.ot_P.numel() > 0:
             step = self.local_step if self.training else self.local_step_val
