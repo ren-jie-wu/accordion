@@ -41,8 +41,13 @@ from simba_plus.loss.gene_alignment import (
 from simba_plus.loss.ot_alignment import (
     build_two_sample_cell_index,
     compute_two_sample_ot_state,
-    ot_cost_from_plan_sqeuclidean,
+    ot_cost_two_sample,
     TwoSampleOTState,
+    PairOTState,
+    build_sample_cell_index,
+    make_all_sample_pairs,
+    compute_multi_sample_ot_states,
+    ot_cost_multi_sample,
 )
 
 
@@ -499,7 +504,6 @@ class LightningProxModel(L.LightningModule):
         self._register_others()
     
     def _register_gene_pairs(self):
-        self._gene_pairs: MultiSampleGenePairs | None = None
         if self.gene_align_lambda > 0:
             if not (hasattr(self.data["gene"], "sample") and hasattr(self.data["gene"], "gene_id")):
                 raise ValueError(
@@ -521,19 +525,10 @@ class LightningProxModel(L.LightningModule):
             if not hasattr(self.data["cell"], "sample"):
                 raise ValueError("ot_lambda > 0 requires data['cell'].sample")
             
-            # buffers for OT plan (NOT persistent: too big for checkpoints; recompute is fine)
-            self.register_buffer("ot_idx0", torch.empty(0, dtype=torch.long), persistent=False)
-            self.register_buffer("ot_idx1", torch.empty(0, dtype=torch.long), persistent=False)
-            self.register_buffer("ot_P", torch.empty(0), persistent=False)
-
-            # all cell indices per sample (small enough; can be persistent if you want)
-            self._cell_idx0_all = None
-            self._cell_idx1_all = None
-
-            idx0_all, idx1_all = build_two_sample_cell_index(self.data["cell"].sample)
-            # keep on CPU for now; we'll move to device when computing OT
-            self._cell_idx0_all = idx0_all
-            self._cell_idx1_all = idx1_all
+            # not buffers; we'll compute OT related variables on the fly
+            self._ot_groups: dict[int, torch.Tensor] = build_sample_cell_index(self.data["cell"].sample)
+            # self._ot_pairs_all: List[Tuple[int, int]] = make_all_sample_pairs(self._ot_groups.keys())
+            self._ot_states: List[PairOTState] = []
 
     def _register_others(self):
         # self.register_buffer("cell_weights", self.cell_weights) # not used
@@ -813,11 +808,7 @@ class LightningProxModel(L.LightningModule):
     def ot_alignment_loss(self) -> torch.Tensor:
         # current trainable mu (NOT detach) => gradients flow to those cells
         cell_mu = self.encoder.__mu_dict__["cell"]
-        x = cell_mu[self.ot_idx0]  # (n0,d)
-        y = cell_mu[self.ot_idx1]  # (n1,d)
-
-        P = self.ot_P.detach()     # treat plan as constant for this epoch
-        return ot_cost_from_plan_sqeuclidean(x, y, P)
+        return ot_cost_multi_sample(cell_mu, self._ot_states, P_detach=True)
 
     def training_step(self, batch, batch_idx):
         # batch = batch.to(self.device)
@@ -1211,34 +1202,22 @@ class LightningProxModel(L.LightningModule):
                 t0 = time.time()
                 with torch.no_grad():
                     cell_mu = self.encoder.__mu_dict__["cell"].detach()
-
-                    # move idx to device lazily
-                    idx0_all = self._cell_idx0_all.to(cell_mu.device)
-                    idx1_all = self._cell_idx1_all.to(cell_mu.device)
-
-                    state = compute_two_sample_ot_state(
+                    self._ot_states = compute_multi_sample_ot_states(
                         cell_mu=cell_mu,
-                        idx0_all=idx0_all,
-                        idx1_all=idx1_all,
+                        groups=self._ot_groups,
                         subset_size=self.ot_k,
                         eps=self.ot_eps,
                         n_iters=self.ot_iter,
-                        generator=None,
                     )
-                    self.ot_idx0 = state.idx0
-                    self.ot_idx1 = state.idx1
-                    self.ot_P = state.P
 
                 t1 = time.time()
                 self.log("time:ot_plan", t1 - t0, on_step=False, on_epoch=True)
-                self.log("ot/n0", torch.tensor(int(self.ot_idx0.numel()), device=self.device), on_step=False, on_epoch=True)
-                self.log("ot/n1", torch.tensor(int(self.ot_idx1.numel()), device=self.device), on_step=False, on_epoch=True)
 
     def _compute_ot_now(self, return_weight=False):
         """Decide whether to compute OT loss for this training/validation step."""
         ot_weight = self.ot_lambda * self._linear_warmup_scale(self.ot_n_no, self.ot_n_warmup)
         compute_ot_now = False
-        if ot_weight > 0 and self.ot_P.numel() > 0:
+        if ot_weight > 0 and hasattr(self, "_ot_states") and self._ot_states is not None and len(self._ot_states) > 0:
             step = self.local_step if self.training else self.local_step_val
             if self.ot_loss_every_n_steps > 0:
                 compute_ot_now = (step % self.ot_loss_every_n_steps == 0)
