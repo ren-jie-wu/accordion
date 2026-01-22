@@ -33,6 +33,8 @@ from simba_plus.negative_sampling import negative_sampling_same_sample_bipartite
 from simba_plus.loss.gene_alignment import (
     TwoSampleGenePairs, 
     build_two_sample_gene_pairs, 
+    MultiSampleGenePairs,
+    build_multi_sample_gene_pairs,
     gene_alignment_msd_loss,
 )
 from simba_plus.loss.ot_alignment import (
@@ -703,7 +705,7 @@ class LightningProxModel(L.LightningModule):
         self._register_others()
     
     def _register_gene_pairs(self):
-        self._gene_pairs: TwoSampleGenePairs | None = None
+        self._gene_pairs: MultiSampleGenePairs | None = None
         if self.gene_align_lambda > 0:
             if not (hasattr(self.data["gene"], "sample") and hasattr(self.data["gene"], "gene_id")):
                 raise ValueError(
@@ -711,14 +713,14 @@ class LightningProxModel(L.LightningModule):
                     "(constructed in make_sc_HetData_multi_rna)."
                 )
             
-            pairs = build_two_sample_gene_pairs(
+            pairs = build_multi_sample_gene_pairs(
                 gene_sample=self.data["gene"].sample,
                 gene_id=self.data["gene"].gene_id,
             )
             
             self.register_buffer("gene_align_idx0", pairs.idx0, persistent=True)
             self.register_buffer("gene_align_idx1", pairs.idx1, persistent=True)
-            self._gene_pairs = TwoSampleGenePairs(idx0=self.gene_align_idx0, idx1=self.gene_align_idx1)
+            self._gene_pairs = MultiSampleGenePairs(idx0=self.gene_align_idx0, idx1=self.gene_align_idx1)
     
     def _register_ot_state(self):
         if self.ot_lambda > 0:

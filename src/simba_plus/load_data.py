@@ -150,7 +150,7 @@ def _align_gene_names(genes_list: List[List[str]], threshold: float = 0.05): #TO
                 raise ValueError(f"The overlap ratio between the gene names of the {i}th and {j}th datasets is less than {threshold}")
 
 
-def _check_no_duplicates(*genes_list: List[List[str]], name="RNA"):
+def _check_no_duplicates(genes_list: List[List[str]], name="RNA"):
     """
     Check if there are any duplicate gene names in the multiple RNA-seq datasets.
     """
@@ -199,8 +199,8 @@ def make_sc_HetData_multi_rna(
     ## prepare genes
     # taking care of None in adata_CG_list because we may allow providing only one of RNA and ATAC in the future
     genes_list = [list(map(str, adata.var_names)) if adata is not None else [] for adata in adata_CG_list]
-    _check_no_duplicates(*genes_list)
     _align_gene_names(genes_list)
+    _check_no_duplicates(genes_list)
     union_genes = sorted(set().union(*[set(genes) for genes in genes_list if len(genes) > 0]))
     gene_to_id = {gene: i for i, gene in enumerate(union_genes)} # common gene names for future gene alignment use
     
