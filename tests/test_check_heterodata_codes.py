@@ -3,7 +3,7 @@ import pytest
 import torch
 from torch_geometric.data import HeteroData
 
-from simba_plus.model_prox import _CheckHeteroDataCodes
+from simba_plus.util_modules import _CheckHeteroDataCodes as chk
 
 
 def _make_heterodata(
@@ -57,7 +57,6 @@ def _make_heterodata(
 # -------------------------
 
 def test_remap_to_consecutive_basic():
-    chk = _CheckHeteroDataCodes()
     x = torch.tensor([10, 10, 5, 7], dtype=torch.long)
     y = chk._remap_to_consecutive(x)
     assert y.shape == x.shape
@@ -68,14 +67,12 @@ def test_remap_to_consecutive_basic():
 
 
 def test_remap_to_consecutive_empty():
-    chk = _CheckHeteroDataCodes()
     x = torch.empty((0,), dtype=torch.long)
     y = chk._remap_to_consecutive(x)
     assert y.numel() == 0
 
 
 def test_make_batch_local_from_global_per_sample_consecutive():
-    chk = _CheckHeteroDataCodes()
     sample = torch.tensor([0, 0, 0, 1, 1, 1], dtype=torch.long)
     batch = torch.tensor([10, 10, 11, 5, 7, 7], dtype=torch.long)
     bl = chk._make_batch_local_from_global(sample, batch)
@@ -89,7 +86,6 @@ def test_make_batch_local_from_global_per_sample_consecutive():
 
 
 def test_make_batch_global_from_local_is_globally_consecutive():
-    chk = _CheckHeteroDataCodes()
     sample = torch.tensor([0, 0, 0, 1, 1, 1, 2, 2], dtype=torch.long)
     # intentionally non-consecutive locals per sample
     batch_local = torch.tensor([5, 5, 6, 0, 3, 3, 9, 9], dtype=torch.long)
@@ -99,7 +95,6 @@ def test_make_batch_global_from_local_is_globally_consecutive():
 
 
 def test_roundtrip_global_local_consistency():
-    chk = _CheckHeteroDataCodes()
     sample = torch.tensor([0, 0, 0, 1, 1, 2, 2, 2], dtype=torch.long)
     batch_local = torch.tensor([2, 2, 9, 10, 10, 5, 8, 8], dtype=torch.long)
 
@@ -120,7 +115,6 @@ def test_roundtrip_global_local_consistency():
 # -------------------------
 
 def test_check_heterodata_ok_standard():
-    chk = _CheckHeteroDataCodes()
 
     # 2 samples, cell sample consecutive, gene sample subset (only sample 0)
     cell_sample = torch.tensor([0, 0, 0, 1, 1], dtype=torch.long)
@@ -148,7 +142,6 @@ def test_check_heterodata_ok_standard():
 
 
 def test_check_heterodata_cell_sample_not_consecutive_fails():
-    chk = _CheckHeteroDataCodes()
     # samples are {0,2} not consecutive
     cell_sample = torch.tensor([0, 0, 2, 2], dtype=torch.long)
     gene_sample = torch.tensor([0, 2], dtype=torch.long)
@@ -160,7 +153,6 @@ def test_check_heterodata_cell_sample_not_consecutive_fails():
 
 
 def test_check_heterodata_feature_sample_not_subset_fails():
-    chk = _CheckHeteroDataCodes()
     cell_sample = torch.tensor([0, 0, 1, 1], dtype=torch.long)
     gene_sample = torch.tensor([0, 2], dtype=torch.long)  # 2 not in cell samples
     data = _make_heterodata(n_cell=4, n_gene=2, cell_sample=cell_sample, gene_sample=gene_sample)
@@ -171,7 +163,6 @@ def test_check_heterodata_feature_sample_not_subset_fails():
 
 
 def test_check_heterodata_generate_batch_local_from_batch():
-    chk = _CheckHeteroDataCodes()
     cell_sample = torch.tensor([0, 0, 0, 1, 1, 1], dtype=torch.long)
     # global batch is consecutive (0..2)
     cell_batch = torch.tensor([0, 0, 1, 2, 2, 2], dtype=torch.long)
@@ -195,7 +186,6 @@ def test_check_heterodata_generate_batch_local_from_batch():
 
 
 def test_check_heterodata_generate_batch_from_batch_local():
-    chk = _CheckHeteroDataCodes()
     cell_sample = torch.tensor([0, 0, 0, 1, 1], dtype=torch.long)
     # local codes can be non-consecutive; checker should generate global consecutive
     cell_batch_local = torch.tensor([5, 5, 9, 0, 3], dtype=torch.long)
@@ -217,7 +207,6 @@ def test_check_heterodata_generate_batch_from_batch_local():
 
 
 def test_check_heterodata_inconsistent_batch_local_fails():
-    chk = _CheckHeteroDataCodes()
     cell_sample = torch.tensor([0, 0, 1, 1], dtype=torch.long)
     cell_batch = torch.tensor([0, 1, 2, 2], dtype=torch.long)  # consecutive (0..2)
 

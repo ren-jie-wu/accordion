@@ -29,6 +29,7 @@ from simba_plus._utils import (
     make_key,
     update_lr,
 )
+from simba_plus.util_modules import BufferDict, _CheckHeteroDataCodes as chk
 from simba_plus.negative_sampling import negative_sampling_same_sample_bipartite
 from simba_plus.loss.gene_alignment import (
     TwoSampleGenePairs, 
@@ -43,17 +44,6 @@ from simba_plus.loss.ot_alignment import (
     ot_cost_from_plan_sqeuclidean,
     TwoSampleOTState,
 )
-
-
-class BufferDict(nn.Module):
-    def __init__(self, d: Dict[str, Tensor]):
-        super().__init__()
-        for k, v in d.items():
-            name = f"_{k}"
-            self.register_buffer(name, v)
-    
-    def __getitem__(self, key: str) -> Tensor:
-        return getattr(self, f"_{key}")
 
 
 class _PerSampleBatchedParam(nn.Module):
@@ -94,201 +84,6 @@ class _PerSampleBatchedParam(nn.Module):
             return self.param[i]
 
 
-class _CheckHeteroDataCodes:
-    """
-    Check if the codes are consecutive and consistent (sample/batch/batch_local).
-    Optionally generate missing `cell.batch` or `cell.batch_local` in-place.
-    """
-
-    def __init__(self):
-        super().__init__()
-
-    def _as_sorted_unique_list(self, x: torch.Tensor) -> List[int]:
-        if x is None or x.numel() == 0:
-            return []
-        return sorted(torch.unique(x).detach().cpu().tolist())
-
-    def _is_subset(self, ref: torch.Tensor, sub: torch.Tensor) -> bool:
-        ref_u, sub_u = self._as_sorted_unique_list(ref), self._as_sorted_unique_list(sub)
-        return set(sub_u) <= set(ref_u)
-
-    def check_consecutive(self, codes: torch.Tensor, start_with: int = 0, allow_empty: bool = False) -> bool:
-        uniq = self._as_sorted_unique_list(codes)
-        if len(uniq) == 0:
-            return allow_empty
-        expected = list(range(start_with, start_with + len(uniq)))
-        return uniq == expected
-
-    def _remap_to_consecutive(self, codes: torch.Tensor, start_with: int = 0) -> torch.Tensor:
-        """
-        Remap arbitrary integer codes to consecutive codes starting at start_with.
-        Returned tensor is same shape as codes.
-        """
-        if codes.numel() == 0:
-            return codes.clone()
-        uniq = torch.unique(codes)
-        uniq_sorted = torch.sort(uniq).values
-        # map each code -> its index in uniq_sorted
-        # safe because uniq_sorted contains all codes
-        idx = torch.searchsorted(uniq_sorted, codes)
-        return idx.to(torch.long) + int(start_with)
-    
-    def _make_batch_local_from_global(
-        self,
-        sample_codes: torch.Tensor,   # (N,)
-        batch_codes: torch.Tensor,    # (N,) global batch codes (may be non-consecutive)
-    ) -> torch.Tensor:
-        """
-        For each sample, remap its global batch codes to local consecutive codes 0..B_s-1.
-
-        Returns:
-            batch_local: (N,) long tensor
-        """
-        if sample_codes.ndim != 1 or batch_codes.ndim != 1:
-            raise ValueError("sample_codes and batch_codes must be 1D")
-        if sample_codes.numel() != batch_codes.numel():
-            raise ValueError("sample_codes and batch_codes must have the same length")
-        if batch_codes.numel() == 0:
-            return torch.empty((0,), dtype=torch.long, device=batch_codes.device)
-
-        device = batch_codes.device
-        out = torch.empty_like(batch_codes, dtype=torch.long, device=device)
-
-        # iterate samples in sorted unique order (stable)
-        for sid in self._as_sorted_unique_list(sample_codes):
-            sid = int(sid)
-            mask = (sample_codes == sid)
-            b = batch_codes[mask]
-            # remap b to 0..K-1 (consecutive)
-            local = self._remap_to_consecutive(b)
-            out[mask] = local
-
-        return out
-
-    def _make_batch_global_from_local(
-        self,
-        sample_codes: torch.Tensor,     # (N,)
-        batch_local: torch.Tensor,      # (N,) local batch codes per sample (may be non-consecutive)
-    ) -> torch.Tensor:
-        """
-        Build a global consecutive batch code by offsetting each sample's local batches.
-
-        For each sample s:
-        - remap its batch_local values to consecutive 0..B_s-1 (even if input isn't)
-        - then add an offset that accumulates previous samples' B
-
-        Returns:
-            batch_global: (N,) long tensor, consecutive 0..(sum B_s - 1)
-        """
-        if sample_codes.ndim != 1 or batch_local.ndim != 1:
-            raise ValueError("sample_codes and batch_local must be 1D")
-        if sample_codes.numel() != batch_local.numel():
-            raise ValueError("sample_codes and batch_local must have the same length")
-        if batch_local.numel() == 0:
-            return torch.empty((0,), dtype=torch.long, device=sample_codes.device)
-
-        device = batch_local.device
-        out = torch.empty_like(batch_local, dtype=torch.long, device=device)
-
-        offset = 0
-        for sid in self._as_sorted_unique_list(sample_codes):
-            sid = int(sid)
-            mask = (sample_codes == sid)
-            bl = batch_local[mask]
-            blc = self._remap_to_consecutive(bl)
-            out[mask] = blc + offset
-            offset += int(blc.max()) + 1 if blc.numel() > 0 else 0
-
-        return out
-
-    def check_heterodata(
-        self,
-        data: HeteroData,
-        start_with: int = 0,
-        allow_empty: bool = False,
-    ) -> Tuple[bool, List[str]]:
-        ok, msgs = True, []
-
-        # ---- basic structure checks ----
-        if "cell" not in data.node_types:
-            ok = False
-            msgs.append("Cell node type is required")
-
-        feature_types = list(set(data.node_types) - {"cell"})
-        if len(feature_types) == 0:
-            ok = False
-            msgs.append("At least one feature node type is required")
-
-        if not ok:
-            return False, msgs
-
-        # ---- sample checks ----
-        if hasattr(data["cell"], "sample"):
-            sample_codes = data["cell"].sample
-            if not self.check_consecutive(sample_codes, start_with, allow_empty):
-                ok = False
-                msgs.append(
-                    f"Sample codes for cell node type are not consecutive (expected {start_with}..K{start_with-1 if start_with <= 0 else ('' if start_with == 1 else '+'+str(start_with-1))}). "
-                    f"Got unique={self._as_sorted_unique_list(sample_codes)[:20]}"
-                )
-
-            # feature sample subset check
-            for node_type in feature_types:
-                if not hasattr(data[node_type], "sample"):
-                    ok = False
-                    msgs.append(f"Sample attribute is required for node type {node_type}")
-                    continue
-                if not self._is_subset(sample_codes, data[node_type].sample):
-                    ok = False
-                    msgs.append(
-                        f"Sample codes for node type {node_type} are not a subset of cell sample codes. "
-                        f"{node_type} unique (first 20) = {self._as_sorted_unique_list(data[node_type].sample)[:20]}, "
-                        f"cell unique (first 20) = {self._as_sorted_unique_list(sample_codes)[:20]}"
-                    )
-        else:
-            # If no sample codes, we treat as single-sample data.
-            sample_codes = torch.zeros(data["cell"].num_nodes, dtype=torch.long)
-        
-        if not ok:
-            return False, msgs
-
-        # ---- batch / batch_local checks or generation ----
-        has_batch = hasattr(data["cell"], "batch")
-        has_batch_local = hasattr(data["cell"], "batch_local")
-
-        if has_batch:
-            batch = data["cell"].batch
-            if not self.check_consecutive(batch, start_with, allow_empty):
-                ok = False
-                msgs.append(
-                    f"Batch codes for cell node type are not consecutive (global). First 20 unique = {self._as_sorted_unique_list(batch)[:20]}"
-                )
-            
-            if not ok:
-                return False, msgs
-
-            if not has_batch_local:
-                # generate batch_local based on batch and sample codes
-                data["cell"].batch_local = self._make_batch_local_from_global(sample_codes, batch)
-                msgs.append("Generated cell.batch_local from cell.batch since cell.batch_local is missing")
-
-            else:
-                # check if batch_local is correct based on batch and sample codes
-                batch_local = self._make_batch_local_from_global(sample_codes, batch)
-                if not torch.equal(data["cell"].batch_local, batch_local):
-                    ok = False
-                    msgs.append(
-                        f"Inconsistent cell.batch_local vs cell.batch")
-        else:
-            if has_batch_local:
-                # check if batch_local is correct based on batch and sample codes
-                batch_local = data["cell"].batch_local
-                data["cell"].batch = self._make_batch_global_from_local(sample_codes, batch_local)
-                msgs.append("Generated cell.batch from cell.batch_local since cell.batch is missing")
-        
-        return ok, msgs
-
-
 class AuxParams(nn.Module):
     def __init__(self, data: HeteroData, edgetype_specific: bool = True, check_data: bool = False) -> None:
         """
@@ -316,8 +111,7 @@ class AuxParams(nn.Module):
         self.edgetype_specific = edgetype_specific
 
         if check_data:
-            checker = _CheckHeteroDataCodes()
-            ok, msgs = checker.check_heterodata(data)
+            ok, msgs = chk.check_heterodata(data)
             if not ok:
                 raise ValueError(f"Invalid heterodata: {msgs}")
             else:
@@ -622,20 +416,20 @@ class LightningProxModel(L.LightningModule):
         self.logger2 = logger
 
         class _logger:
-            def __init__(self):
-                pass
-            def info(self, msg, *args, **kwargs):
+            @classmethod
+            def info(cls, msg, *args, **kwargs):
                 print(msg)
-            def warning(self, msg, *args, **kwargs):
+            @classmethod
+            def warning(cls, msg, *args, **kwargs):
                 print(msg)
-            def error(self, msg, *args, **kwargs):
+            @classmethod
+            def error(cls, msg, *args, **kwargs):
                 print(msg)
         
         if self.logger2 is None:
             self.logger2 = _logger() # fallback to print
         
-        checker = _CheckHeteroDataCodes()
-        ok, msgs = checker.check_heterodata(data)
+        ok, msgs = chk.check_heterodata(data)
         if not ok:
             raise ValueError(f"Invalid heterodata: {msgs}")
         else:
