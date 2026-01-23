@@ -1,8 +1,9 @@
 name: Docs & Mirror
 
 on:
-  push:
-    branches: [main]
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
 
 # avoid concurrent pushes causing mirror staleness or overwrites
 concurrency:

@@ -1,25 +1,24 @@
-# <img src="docs/assets/simba+_icon.webp" alt="simba+" height="110"/> **SIMBA+**
+# <img src="docs/assets/accordion_icon.png" alt="accordion" height="110"/> **ACCORDION**
 
-[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/ren-jie-wu/simba-plus)
-[![CI](https://github.com/ren-jie-wu/simba-plus/actions/workflows/ci.yml/badge.svg)](https://github.com/ren-jie-wu/simba-plus/actions/workflows/ci.yml)
+[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/ren-jie-wu/accordion)
+[![CI](https://github.com/ren-jie-wu/accordion/actions/workflows/ci.yml/badge.svg)](https://github.com/ren-jie-wu/accordion/actions/workflows/ci.yml)
 
-`SIMBA+`, a probabilistic graph framework that integrates **single-cell multiomics** with **GWAS** to:
-1) **Map regulatory elements and disease variants to target genes** in specific cellular contexts through metapath analysis, and
-2) **Decompose complex trait heritability** at **single-cell resolution**.
+`ACCORDION` is a multi-condition extension of SIMBA+ (single-cell co-embedding framework) that
+- produces a well-integrated cell embedding and interpretable feature-level outputs, while
+- removing batch effects without erasing true biological signals, including both condition effects and within-condition cell-type structure, and
+- providing diagnostics and recommendations for tuning alignment strength.
+
+See the original SIMBA+ code [here](https://github.com/pinellolab/simba-plus).
 
 ## Installation
 ```
-git clone -b dev git@github.com:pinellolab/simba-plus.git
-cd simba-plus
+git clone -b dev git@github.com:ren-jie-wu/accordion.git
+cd accordion
 pip install .
 ```
-## Tutorials
-- [SNP-gene link prediction tutorial](notebooks/tutorial-eqtl.ipynb)
-- [Element-gene link prediction tutorial](notebooks/tutorial-crispr.ipynb)
 
 ## Usage
-See [CLI interface](docs/CLI.md) for running SIMBA+ on AnnData input.  
-Also see [API reference](https://pinellolab.github.io/simba-plus/api/index.html).
+See [CLI interface](docs/CLI.md) for running ACCORDION via command line.
 
 ## Contributing
 
@@ -28,7 +27,7 @@ Also see [API reference](https://pinellolab.github.io/simba-plus/api/index.html)
    ```
    pip install -e .
    ```
-   every time making changes to the code. Then we can run
+   to make sure packages are installed and changes are reflected. Then run
    ```
    simba+ <subcommand> ...
    ```
