@@ -138,9 +138,13 @@ def run(
     gene_align_n_no: int = 0,
     gene_align_n_warmup: int = 10,
     ot_cs_lambda: float = 0.0,
-    ot_cs_n_no: int = 15,
-    ot_cs_n_warmup: int = 30,
+    ot_cs_n_no: int = 7,
+    ot_cs_n_warmup: int = 7,
     ot_cs_k: int = 256,
+    ot_cb_lambda: float = 0.0,
+    ot_cb_n_no: int = 7,
+    ot_cb_n_warmup: int = 7,
+    ot_cb_k: int = 256,
     ot_eps: float = 0.05,
     ot_iter: int = 50,
 ):
@@ -180,12 +184,16 @@ def run(
         gene_align_lambda (float): Weight of the gene alignment loss.
         gene_align_n_no (int): Number of epochs to wait before starting gene alignment.
         gene_align_n_warmup (int): Number of epochs for gene alignment warmup.
-        ot_cs_lambda (float): Weight of the Optimal Transportation loss (among cells).
-        ot_cs_n_no (int): Number of epochs to wait before starting Optimal Transportation loss.
-        ot_cs_n_warmup (int): Number of epochs for Optimal Transportation loss warmup.
-        ot_cs_k (int): Number of cells to sample for Optimal Transportation loss.
-        ot_eps (float): Epsilon for Optimal Transportation loss.
-        ot_iter (int): Number of iterations for Optimal Transportation loss.
+        ot_cs_lambda (float): Weight of the cross-sample Optimal Transportation loss (among cells).
+        ot_cs_n_no (int): Number of epochs to wait before starting cross-sample Optimal Transportation loss.
+        ot_cs_n_warmup (int): Number of epochs for cross-sample Optimal Transportation loss warmup.
+        ot_cs_k (int): Number of cells to sample for cross-sample Optimal Transportation loss.
+        ot_cb_lambda (float): Weight of the cross-batch Optimal Transportation loss (among cells).
+        ot_cb_n_no (int): Number of epochs to wait before starting cross-batch Optimal Transportation loss.
+        ot_cb_n_warmup (int): Number of epochs for cross-batch Optimal Transportation loss warmup.
+        ot_cb_k (int): Number of cells to sample for cross-batch Optimal Transportation loss.
+        ot_eps (float): Epsilon for Optimal Transportation loss (shared for both cross-sample and cross-batch).
+        ot_iter (int): Number of iterations for Optimal Transportation loss (shared for both cross-sample and cross-batch).
 
     Returns:
         None
@@ -328,6 +336,10 @@ def run(
         ot_cs_n_no=ot_cs_n_no,
         ot_cs_n_warmup=ot_cs_n_warmup,
         ot_cs_k=ot_cs_k,
+        ot_cb_lambda=ot_cb_lambda,
+        ot_cb_n_no=ot_cb_n_no,
+        ot_cb_n_warmup=ot_cb_n_warmup,
+        ot_cb_k=ot_cb_k,
         ot_eps=ot_eps,
         ot_iter=ot_iter,
     ).to(device)
@@ -771,37 +783,61 @@ def add_argument(parser):
         "--ot-cs-lambda",
         type=float,
         default=0.0, # 0.0001
-        help="Weight of the Optimal Transportation loss (among cells)",
+        help="Weight of the cross-sample Optimal Transportation loss (among cells)",
     )
     parser.add_argument(
         "--ot-cs-n-no",
         type=int,
         default=7,
-        help="Number of epochs to wait before starting Optimal Transportation loss",
+        help="Number of epochs to wait before starting cross-sample Optimal Transportation loss",
     )
     parser.add_argument(
         "--ot-cs-n-warmup",
         type=int,
         default=7,
-        help="Number of epochs for Optimal Transportation loss warmup",
+        help="Number of epochs for cross-sample Optimal Transportation loss warmup",
     )
     parser.add_argument(
         "--ot-cs-k",
         type=int,
         default=256, # depend on number of cells
-        help="Subsample size for Optimal Transportation loss",
+        help="Subsample size for cross-sample Optimal Transportation loss",
+    )
+    parser.add_argument(
+        "--ot-cb-lambda",
+        type=float,
+        default=0.0, # 0.0001
+        help="Weight of the cross-batch Optimal Transportation loss (among cells)",
+    )
+    parser.add_argument(
+        "--ot-cb-n-no",
+        type=int,
+        default=7,
+        help="Number of epochs to wait before starting cross-batch Optimal Transportation loss",
+    )
+    parser.add_argument(
+        "--ot-cb-n-warmup",
+        type=int,
+        default=7,
+        help="Number of epochs for cross-batch Optimal Transportation loss warmup",
+    )
+    parser.add_argument(
+        "--ot-cb-k",
+        type=int,
+        default=256, # depend on number of cells
+        help="Subsample size for cross-batch Optimal Transportation loss",
     )
     parser.add_argument(
         "--ot-eps",
         type=float,
         default=0.05,
-        help="Regularization parameter for Optimal Transportation loss",
+        help="Regularization parameter for Optimal Transportation loss (shared for both cross-sample and cross-batch)",
     )
     parser.add_argument(
         "--ot-iter",
         type=int,
         default=50,
-        help="Number of iterations for Optimal Transportation loss",
+        help="Number of iterations for Optimal Transportation loss (shared for both cross-sample and cross-batch)",
     )
     return parser
 
