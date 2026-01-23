@@ -116,7 +116,7 @@ def test_compute_multi_sample_ot_states_shapes_and_count():
         # Sum should be ~1 (entropic OT with uniform marginals)
         psum = st.P.sum()
         assert torch.isfinite(psum)
-        assert psum.item() > 0
+        assert torch.allclose(psum, psum.new_tensor(1.0))
 
 
 def test_ot_cost_multi_sample_equals_mean_of_pair_costs():
@@ -191,3 +191,26 @@ def test_ot_cost_multi_sample_empty_returns_zero_on_device():
     assert z.device == cell_mu.device
     assert torch.isfinite(z)
     assert z.item() == 0.0
+
+def test_multi_sample_ot_single_sample_returns_empty_and_zero():
+    torch.manual_seed(0)
+    cell_sample = torch.zeros(12, dtype=torch.long)  # only sample 0
+    groups = build_sample_cell_index(cell_sample)
+    assert set(groups.keys()) == {0}
+    assert groups[0].numel() == 12
+
+    cell_mu = torch.randn(12, 4)
+
+    states = compute_multi_sample_ot_states(
+        cell_mu=cell_mu,
+        groups=groups,
+        subset_size=5,
+        eps=0.2,
+        n_iters=20,
+    )
+    assert states == [] or len(states) == 0
+
+    cost = ot_cost_multi_sample(cell_mu, states, P_detach=True)
+    assert cost.device == cell_mu.device
+    assert torch.isfinite(cost)
+    assert torch.allclose(cost, cell_mu.new_tensor(0.0))
