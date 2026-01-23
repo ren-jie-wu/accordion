@@ -5,8 +5,8 @@ Run `python -m simba_plus.simba_plus <subcommand> -h` for usage examples.
 ```
 usage: simba+ load_data [-h] [--gene-adata GENE_ADATA [GENE_ADATA ...]]
                         [--peak-adata PEAK_ADATA]
-                        [--batch-col BATCH_COL [BATCH_COL ...]]
-                        --out-path OUT_PATH
+                        [--batch-col BATCH_COL [BATCH_COL ...]] --out-path
+                        OUT_PATH
 
 Prepare a HeteroData object from AnnData of RNA-seq and ATAC-seq data.
 
@@ -47,6 +47,8 @@ usage: simba+ train [-h] [--adata-CG ADATA_CG] [--adata-CP ADATA_CP]
                     [--gene-align-n-warmup GENE_ALIGN_N_WARMUP]
                     [--ot-cs-lambda OT_CS_LAMBDA] [--ot-cs-n-no OT_CS_N_NO]
                     [--ot-cs-n-warmup OT_CS_N_WARMUP] [--ot-cs-k OT_CS_K]
+                    [--ot-cb-lambda OT_CB_LAMBDA] [--ot-cb-n-no OT_CB_N_NO]
+                    [--ot-cb-n-warmup OT_CB_N_WARMUP] [--ot-cb-k OT_CB_K]
                     [--ot-eps OT_EPS] [--ot-iter OT_ITER]
                     data_path
 
@@ -111,17 +113,31 @@ options:
   --gene-align-n-warmup GENE_ALIGN_N_WARMUP
                         Number of epochs for gene alignment warmup
   --ot-cs-lambda OT_CS_LAMBDA
-                        Weight of the Optimal Transportation loss (among
-                        cells)
-  --ot-cs-n-no OT_CS_N_NO     Number of epochs to wait before starting Optimal
-                        Transportation loss
+                        Weight of the cross-sample Optimal Transportation loss
+                        (among cells)
+  --ot-cs-n-no OT_CS_N_NO
+                        Number of epochs to wait before starting cross-sample
+                        Optimal Transportation loss
   --ot-cs-n-warmup OT_CS_N_WARMUP
-                        Number of epochs for Optimal Transportation loss
-                        warmup
-  --ot-cs-k OT_CS_K           Subsample size for Optimal Transportation loss
-  --ot-eps OT_EPS       Regularization parameter for Optimal Transportation
+                        Number of epochs for cross-sample Optimal
+                        Transportation loss warmup
+  --ot-cs-k OT_CS_K     Subsample size for cross-sample Optimal Transportation
                         loss
+  --ot-cb-lambda OT_CB_LAMBDA
+                        Weight of the cross-batch Optimal Transportation loss
+                        (among cells)
+  --ot-cb-n-no OT_CB_N_NO
+                        Number of epochs to wait before starting cross-batch
+                        Optimal Transportation loss
+  --ot-cb-n-warmup OT_CB_N_WARMUP
+                        Number of epochs for cross-batch Optimal
+                        Transportation loss warmup
+  --ot-cb-k OT_CB_K     Subsample size for cross-batch Optimal Transportation
+                        loss
+  --ot-eps OT_EPS       Regularization parameter for Optimal Transportation
+                        loss (shared for both cross-sample and cross-batch)
   --ot-iter OT_ITER     Number of iterations for Optimal Transportation loss
+                        (shared for both cross-sample and cross-batch)
 ```
 
 ## simba+ `eval` ... 
