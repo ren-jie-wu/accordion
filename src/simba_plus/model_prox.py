@@ -527,7 +527,7 @@ class LightningProxModel(L.LightningModule):
             
             # not buffers; we'll compute OT related variables on the fly
             self._ot_groups: dict[int, torch.Tensor] = build_sample_cell_index(self.data["cell"].sample)
-            # self._ot_pairs_all: List[Tuple[int, int]] = make_all_sample_pairs(self._ot_groups.keys())
+            self._ot_pairs: List[Tuple[int, int]] = make_all_sample_pairs(self._ot_groups.keys(), mode="all_pairs")
             self._ot_states: List[PairOTState] = []
 
     def _register_others(self):
@@ -1205,6 +1205,7 @@ class LightningProxModel(L.LightningModule):
                     self._ot_states = compute_multi_sample_ot_states(
                         cell_mu=cell_mu,
                         groups=self._ot_groups,
+                        pairs=self._ot_pairs,
                         subset_size=self.ot_k,
                         eps=self.ot_eps,
                         n_iters=self.ot_iter,

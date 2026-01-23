@@ -3,6 +3,7 @@ from dataclasses import dataclass
 import torch
 from simba_plus.util_modules import _CheckHeteroDataCodes as chk
 from typing import Iterable, List, Tuple
+import random
 
 
 @dataclass(frozen=True)
@@ -67,16 +68,41 @@ def build_sample_cell_index(
 
 
 # take in `groups.keys()` and return `pairs`
-def make_all_sample_pairs(sample_ids: Iterable[int]) -> List[Tuple[int, int]]:
+def make_all_sample_pairs(
+    sample_ids: Iterable[int],
+    mode: str = "all_pairs",
+    k = 0,
+) -> List[Tuple[int, int]]:
     """
     sample_ids: iterable of sample ids (e.g., groups.keys()).
     Return all unordered pairs (s0, s1) with s0 < s1.
     """
     sids = sorted(int(x) for x in set(sample_ids))
     pairs: List[Tuple[int, int]] = []
-    for i in range(len(sids)):
-        for j in range(i + 1, len(sids)):
-            pairs.append((sids[i], sids[j]))
+    if mode == "all_pairs":
+        for i in range(len(sids)):
+            for j in range(i + 1, len(sids)):
+                pairs.append((sids[i], sids[j]))
+    elif mode == "star":
+        ref = sids[0]
+        for sid in sids[1:]:
+            pairs.append((ref, sid))
+    elif mode == "random_k":
+        all_pairs = make_all_sample_pairs(sample_ids, mode="all_pairs")
+        if k == 0:
+            print("Warning in make_all_sample_pairs: k=0 means no random sampling, using all pairs")
+            pairs = all_pairs
+        elif k >= len(all_pairs):
+            print(f"Warning in make_all_sample_pairs: k({k}) >= the number of all pairs({len(all_pairs)}), using all pairs")
+            pairs = all_pairs
+        elif k < 0:
+            raise ValueError(f"k={k} is negative")
+        elif 0 < k < 1: # fraction
+            pairs = random.sample(all_pairs, int(k * len(all_pairs)))
+        else: # number
+            pairs = random.sample(all_pairs, int(k))
+    else:
+        raise ValueError(f"Unknown mode={mode}")
     return pairs
 
 
@@ -180,6 +206,7 @@ def compute_two_sample_ot_state(
 def compute_multi_sample_ot_states(
     cell_mu: torch.Tensor,
     groups: dict[int, torch.Tensor],
+    pairs: List[Tuple[int, int]] | None = None,
     subset_size: int = 2000,
     eps: float = 0.05,
     n_iters: int = 50,
@@ -188,10 +215,16 @@ def compute_multi_sample_ot_states(
     """
     Compute OT states for multiple sample pairs.
     groups: {sid: idx_all}
+    If `pairs` is provided, only compute OT states for the given pairs. Otherwise, compute OT states for all pairs.
     Returns: [PairOTState(s0, s1, TwoSampleOTState), ...]
     """
     out: List[PairOTState] = []
-    for s0, s1 in make_all_sample_pairs(groups.keys()):
+    all_pairs = make_all_sample_pairs(groups.keys())
+    if pairs is not None and len(pairs) > 0:
+        pairs = list(set(pairs) & set(all_pairs))
+    else:
+        pairs = all_pairs
+    for s0, s1 in pairs:
         idx0_all = groups[s0]
         idx1_all = groups[s1]
         st = compute_two_sample_ot_state(
