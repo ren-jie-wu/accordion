@@ -23,6 +23,13 @@ class PairOTState:
     state: TwoSampleOTState
 
 
+@dataclass(frozen=True)
+class PairOTStateKeyed:
+    k0: Tuple[int, int]
+    k1: Tuple[int, int]
+    state: TwoSampleOTState
+
+
 # deprecated
 def build_two_sample_cell_index(
     cell_sample: torch.Tensor,
@@ -67,6 +74,35 @@ def build_sample_cell_index(
     return groups
 
 
+def build_sample_batch_cell_index(
+    cell_sample: torch.Tensor,
+    cell_batch_local: torch.Tensor,
+) -> dict[tuple[int, int], torch.Tensor]:
+    """
+    Group cell indices by (sample_id, batch_local).
+    Returns: {(sid, bid): idx_tensor}
+    """
+    if cell_sample.ndim != 1 or cell_batch_local.ndim != 1:
+        raise ValueError("cell_sample and cell_batch_local must be 1D tensors")
+    if cell_sample.numel() != cell_batch_local.numel():
+        raise ValueError("cell_sample and cell_batch_local must have same length")
+
+    groups: dict[tuple[int, int], torch.Tensor] = {}
+    # sample ids are consecutive by your checker
+    for sid in chk._as_sorted_unique_list(cell_sample):
+        sid = int(sid)
+        mask_s = (cell_sample == sid)
+        if not mask_s.any():
+            continue
+        b_uniqs = chk._as_sorted_unique_list(cell_batch_local[mask_s])
+        for bid in b_uniqs:
+            bid = int(bid)
+            idx = (mask_s & (cell_batch_local == bid)).nonzero(as_tuple=False).view(-1)
+            if idx.numel() > 0:
+                groups[(sid, bid)] = idx
+    return groups
+
+
 # take in `groups.keys()` and return `pairs`
 def make_all_sample_pairs(
     sample_ids: Iterable[int],
@@ -98,13 +134,32 @@ def make_all_sample_pairs(
         elif k < 0:
             raise ValueError(f"k={k} is negative")
         elif 0 < k < 1: # fraction
-            pairs = random.sample(all_pairs, int(k * len(all_pairs)))
+            _k = max(1, int(k * len(all_pairs)))
+            pairs = random.sample(all_pairs, _k)
         else: # number
             pairs = random.sample(all_pairs, int(k))
     else:
         raise ValueError(f"Unknown mode={mode}")
     return pairs
 
+
+def make_all_sample_batch_pairs(
+    sample_batch_ids: Iterable[tuple[int, int]],
+    mode: str = "all_pairs",
+    k = 0,
+) -> dict[int, List[Tuple[int, int]]]:
+    """
+    sample_batch_ids: iterable of (sample_id, batch_id) pairs (e.g., groups_sb.keys()).
+    Return all unordered pairs ((s0, b0), (s0, b1)) with b0 < b1.
+    """
+    by_sample: dict[int, List[int]] = {}
+    by_sample_pairs: dict[int, List[Tuple[int, int]]] = {}
+    for sid, bid in sample_batch_ids:
+        sid, bid = int(sid), int(bid)
+        by_sample.setdefault(sid, []).append(bid)
+    for sid in by_sample.keys():
+        by_sample_pairs[sid] = make_all_sample_pairs(by_sample[sid], mode=mode, k=k)
+    return by_sample_pairs
 
 def _pairwise_sqeuclidean(x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
     """
@@ -219,9 +274,12 @@ def compute_multi_sample_ot_states(
     Returns: [PairOTState(s0, s1, TwoSampleOTState), ...]
     """
     out: List[PairOTState] = []
-    all_pairs = make_all_sample_pairs(groups.keys())
+    all_pairs = make_all_sample_pairs(groups.keys(), mode="all_pairs")
     if pairs is not None and len(pairs) > 0:
-        pairs = list(set(pairs) & set(all_pairs))
+        pairs = sorted(set(pairs) & set(all_pairs))
+        if len(pairs) == 0:
+            print(f"Warning in compute_multi_sample_ot_states: no valid pairs found with the provided pairs, using all pairs")
+            pairs = all_pairs
     else:
         pairs = all_pairs
     for s0, s1 in pairs:
@@ -237,6 +295,47 @@ def compute_multi_sample_ot_states(
             generator=generator,
         )
         out.append(PairOTState(s0=s0, s1=s1, state=st))
+    return out
+
+
+def compute_multi_batch_ot_states(
+    cell_mu: torch.Tensor,
+    groups_sb: dict[tuple[int, int], torch.Tensor],
+    pairs_sb: dict[int, List[Tuple[int, int]]] | None = None,
+    subset_size: int = 2000,
+    eps: float = 0.05,
+    n_iters: int = 50,
+    generator: torch.Generator | None = None,
+) -> List[PairOTStateKeyed]:
+    """
+    Compute OT states for batch pairs within each sample.
+    groups_sb: {(sid, bid): idx_all}
+    Returns: [PairOTStateKeyed(((sid,b0),(sid,b1)), state), ...]
+    """
+    # group keys by sample_id
+    by_sample_all_pairs = make_all_sample_batch_pairs(groups_sb.keys(), mode="all_pairs")
+    if pairs_sb is not None and sum(len(pairs) for pairs in pairs_sb.values()) > 0:
+        pairs_sids = pairs_sb.keys() & by_sample_all_pairs.keys()
+        pairs_sb = {sid: sorted(set(pairs_sb[sid]) & set(by_sample_all_pairs[sid])) for sid in pairs_sids}
+        if sum(len(pairs) for pairs in pairs_sb.values()) == 0:
+            print(f"Warning in compute_multi_batch_ot_states: no valid pairs found with the provided pairs_sb, using all pairs")
+            pairs_sb = by_sample_all_pairs
+    else:
+        pairs_sb = by_sample_all_pairs
+
+    out: List[PairOTStateKeyed] = []
+    for sid, bid_pairs in pairs_sb.items():
+        for b0, b1 in bid_pairs:
+            st = compute_two_sample_ot_state(
+                cell_mu=cell_mu,
+                idx0_all=groups_sb[(sid, b0)],
+                idx1_all=groups_sb[(sid, b1)],
+                subset_size=subset_size,
+                eps=eps,
+                n_iters=n_iters,
+                generator=generator,
+            )
+            out.append(PairOTStateKeyed(k0=(sid, b0), k1=(sid, b1), state=st))
     return out
 
 
@@ -264,7 +363,7 @@ def ot_cost_from_plan_sqeuclidean(
     return term1 + term2 - term3
 
 
-def ot_cost_two_sample(
+def ot_cost_two(
     cell_mu: torch.Tensor,
     ot_idx0: torch.Tensor,
     ot_idx1: torch.Tensor,
@@ -286,20 +385,20 @@ def ot_cost_two_sample(
 
 
 # take in `ot_states` and return `cost`
-def ot_cost_multi_sample(
+def ot_cost_multi(
     cell_mu: torch.Tensor,
-    ot_states: List[PairOTState],
+    ot_states: List[PairOTState | PairOTStateKeyed],
     P_detach: bool = True,
 ) -> torch.Tensor:
     """
     Compute OT cost for multiple sample pairs.
     cell_mu: (N_cells, d)  (global)
-    ot_states: [PairOTState(s0, s1, TwoSampleOTState), ...]
+    ot_states: [PairOTState(s0, s1, TwoSampleOTState), ...] or [PairOTStateKeyed(((sid,b0),(sid,b1)), state), ...]
     """
     if ot_states is None or len(ot_states) == 0:
         return cell_mu.new_tensor(0.0)
     costs = [
-        ot_cost_two_sample(
+        ot_cost_two(
             cell_mu=cell_mu,
             ot_idx0=s.state.idx0,
             ot_idx1=s.state.idx1,

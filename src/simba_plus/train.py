@@ -137,10 +137,10 @@ def run(
     gene_align_lambda: float = 0.0,
     gene_align_n_no: int = 0,
     gene_align_n_warmup: int = 10,
-    ot_lambda: float = 0.0,
-    ot_n_no: int = 15,
-    ot_n_warmup: int = 30,
-    ot_k: int = 256,
+    ot_cs_lambda: float = 0.0,
+    ot_cs_n_no: int = 15,
+    ot_cs_n_warmup: int = 30,
+    ot_cs_k: int = 256,
     ot_eps: float = 0.05,
     ot_iter: int = 50,
 ):
@@ -180,10 +180,10 @@ def run(
         gene_align_lambda (float): Weight of the gene alignment loss.
         gene_align_n_no (int): Number of epochs to wait before starting gene alignment.
         gene_align_n_warmup (int): Number of epochs for gene alignment warmup.
-        ot_lambda (float): Weight of the Optimal Transportation loss (among cells).
-        ot_n_no (int): Number of epochs to wait before starting Optimal Transportation loss.
-        ot_n_warmup (int): Number of epochs for Optimal Transportation loss warmup.
-        ot_k (int): Number of cells to sample for Optimal Transportation loss.
+        ot_cs_lambda (float): Weight of the Optimal Transportation loss (among cells).
+        ot_cs_n_no (int): Number of epochs to wait before starting Optimal Transportation loss.
+        ot_cs_n_warmup (int): Number of epochs for Optimal Transportation loss warmup.
+        ot_cs_k (int): Number of cells to sample for Optimal Transportation loss.
         ot_eps (float): Epsilon for Optimal Transportation loss.
         ot_iter (int): Number of iterations for Optimal Transportation loss.
 
@@ -324,10 +324,10 @@ def run(
         gene_align_lambda=gene_align_lambda,
         gene_align_n_no=gene_align_n_no,
         gene_align_n_warmup=gene_align_n_warmup,
-        ot_lambda=ot_lambda,
-        ot_n_no=ot_n_no,
-        ot_n_warmup=ot_n_warmup,
-        ot_k=ot_k,
+        ot_cs_lambda=ot_cs_lambda,
+        ot_cs_n_no=ot_cs_n_no,
+        ot_cs_n_warmup=ot_cs_n_warmup,
+        ot_cs_k=ot_cs_k,
         ot_eps=ot_eps,
         ot_iter=ot_iter,
     ).to(device)
@@ -768,25 +768,25 @@ def add_argument(parser):
         help="Number of epochs for gene alignment warmup",
     )
     parser.add_argument(
-        "--ot-lambda",
+        "--ot-cs-lambda",
         type=float,
         default=0.0, # 0.0001
         help="Weight of the Optimal Transportation loss (among cells)",
     )
     parser.add_argument(
-        "--ot-n-no",
+        "--ot-cs-n-no",
         type=int,
         default=7,
         help="Number of epochs to wait before starting Optimal Transportation loss",
     )
     parser.add_argument(
-        "--ot-n-warmup",
+        "--ot-cs-n-warmup",
         type=int,
         default=7,
         help="Number of epochs for Optimal Transportation loss warmup",
     )
     parser.add_argument(
-        "--ot-k",
+        "--ot-cs-k",
         type=int,
         default=256, # depend on number of cells
         help="Subsample size for Optimal Transportation loss",

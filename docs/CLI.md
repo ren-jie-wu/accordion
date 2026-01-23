@@ -45,8 +45,8 @@ usage: simba+ train [-h] [--adata-CG ADATA_CG] [--adata-CP ADATA_CP]
                     [--gene-align-lambda GENE_ALIGN_LAMBDA]
                     [--gene-align-n-no GENE_ALIGN_N_NO]
                     [--gene-align-n-warmup GENE_ALIGN_N_WARMUP]
-                    [--ot-lambda OT_LAMBDA] [--ot-n-no OT_N_NO]
-                    [--ot-n-warmup OT_N_WARMUP] [--ot-k OT_K]
+                    [--ot-cs-lambda OT_CS_LAMBDA] [--ot-cs-n-no OT_CS_N_NO]
+                    [--ot-cs-n-warmup OT_CS_N_WARMUP] [--ot-cs-k OT_CS_K]
                     [--ot-eps OT_EPS] [--ot-iter OT_ITER]
                     data_path
 
@@ -110,15 +110,15 @@ options:
                         alignment
   --gene-align-n-warmup GENE_ALIGN_N_WARMUP
                         Number of epochs for gene alignment warmup
-  --ot-lambda OT_LAMBDA
+  --ot-cs-lambda OT_CS_LAMBDA
                         Weight of the Optimal Transportation loss (among
                         cells)
-  --ot-n-no OT_N_NO     Number of epochs to wait before starting Optimal
+  --ot-cs-n-no OT_CS_N_NO     Number of epochs to wait before starting Optimal
                         Transportation loss
-  --ot-n-warmup OT_N_WARMUP
+  --ot-cs-n-warmup OT_CS_N_WARMUP
                         Number of epochs for Optimal Transportation loss
                         warmup
-  --ot-k OT_K           Subsample size for Optimal Transportation loss
+  --ot-cs-k OT_CS_K           Subsample size for Optimal Transportation loss
   --ot-eps OT_EPS       Regularization parameter for Optimal Transportation
                         loss
   --ot-iter OT_ITER     Number of iterations for Optimal Transportation loss

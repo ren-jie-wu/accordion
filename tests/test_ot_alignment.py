@@ -10,8 +10,11 @@ from simba_plus.loss.ot_alignment import (
     make_all_sample_pairs,
     compute_two_sample_ot_state,
     compute_multi_sample_ot_states,
-    ot_cost_two_sample,
-    ot_cost_multi_sample,
+    ot_cost_two,
+    ot_cost_multi,
+    build_sample_batch_cell_index,
+    make_all_sample_batch_pairs,
+    compute_multi_batch_ot_states,
 )
 
 
@@ -74,12 +77,21 @@ def test_build_sample_cell_index_groups_cover_and_disjoint():
 
 
 def test_make_all_sample_pairs():
-    pairs = make_all_sample_pairs([0, 1, 2, 3])
+    pairs = make_all_sample_pairs([0, 1, 2, 3], mode="all_pairs")
     assert pairs == [(0, 1), (0, 2), (0, 3), (1, 2), (1, 3), (2, 3)]
 
     # order doesn't matter in input
-    pairs2 = make_all_sample_pairs([3, 2, 1, 0, 0])
+    pairs2 = make_all_sample_pairs([3, 2, 1, 0, 0], mode="all_pairs")
     assert pairs2 == pairs
+
+    # star mode
+    pairs3 = make_all_sample_pairs([0, 1, 2, 3], mode="star")
+    assert pairs3 == [(0, 1), (0, 2), (0, 3)]
+
+    # random_k mode
+    pairs4 = make_all_sample_pairs([0, 1, 2, 3], mode="random_k", k=2)
+    assert len(pairs4) == 2
+    assert set(pairs4) <= set(make_all_sample_pairs([0, 1, 2, 3], mode="all_pairs"))
 
 
 def test_compute_multi_sample_ot_states_shapes_and_count():
@@ -119,7 +131,7 @@ def test_compute_multi_sample_ot_states_shapes_and_count():
         assert torch.allclose(psum, psum.new_tensor(1.0))
 
 
-def test_ot_cost_multi_sample_equals_mean_of_pair_costs():
+def test_ot_cost_multi_equals_mean_of_pair_costs():
     torch.manual_seed(1)
     cell_sample = torch.tensor([0] * 5 + [1] * 6 + [2] * 7, dtype=torch.long)
     groups = build_sample_cell_index(cell_sample)
@@ -133,13 +145,13 @@ def test_ot_cost_multi_sample_equals_mean_of_pair_costs():
         n_iters=80,
     )
 
-    cost_multi = ot_cost_multi_sample(cell_mu, states, P_detach=True)
+    cost_multi = ot_cost_multi(cell_mu, states, P_detach=True)
 
     costs = []
     for s in states:
         st = s.state
         costs.append(
-            ot_cost_two_sample(
+            ot_cost_two(
                 cell_mu=cell_mu,
                 ot_idx0=st.idx0,
                 ot_idx1=st.idx1,
@@ -176,7 +188,7 @@ def test_ot_grad_flow_with_detached_plan_matches_training_usage():
             n_iters=60,
         )
 
-    loss = ot_cost_multi_sample(cell_mu, states, P_detach=True)
+    loss = ot_cost_multi(cell_mu, states, P_detach=True)
     loss.backward()
 
     assert cell_mu.grad is not None
@@ -185,9 +197,9 @@ def test_ot_grad_flow_with_detached_plan_matches_training_usage():
     assert cell_mu.grad.abs().sum().item() > 0
 
 
-def test_ot_cost_multi_sample_empty_returns_zero_on_device():
+def test_ot_cost_multi_empty_returns_zero_on_device():
     cell_mu = torch.randn(10, 3)
-    z = ot_cost_multi_sample(cell_mu, [], P_detach=True)
+    z = ot_cost_multi(cell_mu, [], P_detach=True)
     assert z.device == cell_mu.device
     assert torch.isfinite(z)
     assert z.item() == 0.0
@@ -210,7 +222,129 @@ def test_multi_sample_ot_single_sample_returns_empty_and_zero():
     )
     assert states == [] or len(states) == 0
 
-    cost = ot_cost_multi_sample(cell_mu, states, P_detach=True)
+    cost = ot_cost_multi(cell_mu, states, P_detach=True)
     assert cost.device == cell_mu.device
     assert torch.isfinite(cost)
     assert torch.allclose(cost, cell_mu.new_tensor(0.0))
+
+def test_build_sample_batch_cell_index_cover_and_membership():
+    # sample0: 3 cells in batch0, 2 cells in batch1
+    # sample1: 2 cells in batch0, 2 cells in batch1, 1 cell in batch2
+    cell_sample = torch.tensor([0]*5 + [1]*5, dtype=torch.long)
+    cell_batch_local = torch.tensor([0,0,0,1,1,  0,0,1,1,2], dtype=torch.long)
+
+    groups_sb = build_sample_batch_cell_index(cell_sample, cell_batch_local)
+    assert set(groups_sb.keys()) == {(0,0),(0,1),(1,0),(1,1),(1,2)}
+    assert groups_sb[(0,0)].numel() == 3
+    assert groups_sb[(0,1)].numel() == 2
+    assert groups_sb[(1,0)].numel() == 2
+    assert groups_sb[(1,1)].numel() == 2
+    assert groups_sb[(1,2)].numel() == 1
+
+    # cover & disjoint
+    all_idx = torch.cat(list(groups_sb.values()), dim=0)
+    assert all_idx.numel() == cell_sample.numel()
+    assert torch.unique(all_idx).numel() == cell_sample.numel()
+
+    # membership correctness
+    for (sid, bid), idx in groups_sb.items():
+        assert torch.all(cell_sample[idx] == sid)
+        assert torch.all(cell_batch_local[idx] == bid)
+
+
+def test_make_all_sample_batch_pairs_counts():
+    # keys correspond to: sample0 batches {0,1}, sample1 batches {0,1,2}
+    sample_batch_keys = [(0,0),(0,1),(1,0),(1,1),(1,2)]
+    pairs_by_sample = make_all_sample_batch_pairs(sample_batch_keys, mode="all_pairs")
+
+    assert set(pairs_by_sample.keys()) == {0, 1}
+    assert pairs_by_sample[0] == [(0,1)]
+    assert pairs_by_sample[1] == [(0,1), (0,2), (1,2)]
+
+
+def test_compute_multi_batch_ot_states_shapes_and_keys():
+    torch.manual_seed(0)
+    cell_sample = torch.tensor([0]*5 + [1]*5, dtype=torch.long)
+    cell_batch_local = torch.tensor([0,0,0,1,1,  0,0,1,1,2], dtype=torch.long)
+    groups_sb = build_sample_batch_cell_index(cell_sample, cell_batch_local)
+
+    cell_mu = torch.randn(cell_sample.numel(), 4)
+
+    states = compute_multi_batch_ot_states(
+        cell_mu=cell_mu,
+        groups_sb=groups_sb,
+        pairs_sb=None,
+        subset_size=3,
+        eps=0.2,
+        n_iters=50,
+    )
+
+    # sample0: C(2,2)=1, sample1: C(3,2)=3 => total 4
+    assert len(states) == 4
+
+    for s in states:
+        assert isinstance(s.k0, tuple) and isinstance(s.k1, tuple)
+        sid0, b0 = s.k0
+        sid1, b1 = s.k1
+        assert sid0 == sid1  # within-sample
+        assert (sid0, b0) in groups_sb
+        assert (sid1, b1) in groups_sb
+
+        st = s.state
+        assert st.P.shape == (st.idx0.numel(), st.idx1.numel())
+        assert torch.isfinite(st.P).all()
+        assert torch.allclose(st.P.sum(), st.P.new_tensor(1.0))
+
+
+def test_ot_cost_multi_keyed_equals_manual_mean():
+    torch.manual_seed(1)
+    cell_sample = torch.tensor([0]*6 + [1]*6, dtype=torch.long)
+    cell_batch_local = torch.tensor([0,0,0,1,1,1,  0,0,1,1,2,2], dtype=torch.long)
+    groups_sb = build_sample_batch_cell_index(cell_sample, cell_batch_local)
+
+    cell_mu = torch.randn(cell_sample.numel(), 3)
+
+    states = compute_multi_batch_ot_states(
+        cell_mu=cell_mu,
+        groups_sb=groups_sb,
+        subset_size=4,
+        eps=0.3,
+        n_iters=60,
+    )
+
+    cost_multi = ot_cost_multi(cell_mu, states, P_detach=True)
+
+    costs = []
+    for s in states:
+        st = s.state
+        costs.append(
+            ot_cost_two(
+                cell_mu=cell_mu,
+                ot_idx0=st.idx0,
+                ot_idx1=st.idx1,
+                ot_P=st.P,
+                P_detach=True,
+            )
+        )
+    cost_manual = torch.stack(costs).mean()
+    assert torch.allclose(cost_multi, cost_manual, atol=1e-6, rtol=0)
+
+
+def test_compute_multi_batch_ot_states_pairs_sb_filtering_fallback():
+    torch.manual_seed(0)
+    cell_sample = torch.tensor([0]*5 + [1]*5, dtype=torch.long)
+    cell_batch_local = torch.tensor([0,0,0,1,1,  0,0,1,1,2], dtype=torch.long)
+    groups_sb = build_sample_batch_cell_index(cell_sample, cell_batch_local)
+    cell_mu = torch.randn(cell_sample.numel(), 4)
+
+    # Provide invalid pairs only -> should fallback to all_pairs
+    pairs_sb = {0: [(0, 999)], 1: [(123, 456)]}
+    states = compute_multi_batch_ot_states(
+        cell_mu=cell_mu,
+        groups_sb=groups_sb,
+        pairs_sb=pairs_sb,
+        subset_size=3,
+        eps=0.2,
+        n_iters=30,
+    )
+    assert len(states) > 0

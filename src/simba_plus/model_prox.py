@@ -41,13 +41,17 @@ from simba_plus.loss.gene_alignment import (
 from simba_plus.loss.ot_alignment import (
     build_two_sample_cell_index,
     compute_two_sample_ot_state,
-    ot_cost_two_sample,
+    ot_cost_two,
     TwoSampleOTState,
     PairOTState,
     build_sample_cell_index,
     make_all_sample_pairs,
     compute_multi_sample_ot_states,
-    ot_cost_multi_sample,
+    ot_cost_multi,
+    PairOTStateKeyed,
+    build_sample_batch_cell_index,
+    make_all_sample_batch_pairs,
+    compute_multi_batch_ot_states,
 )
 
 
@@ -401,14 +405,18 @@ class LightningProxModel(L.LightningModule):
         gene_align_lambda: float = 0.0,
         gene_align_n_no: int = 0,
         gene_align_n_warmup: int = 10,
-        ot_lambda: float = 0.0,
-        ot_n_no: int = 15,
-        ot_n_warmup: int = 30,
-        ot_k: int = 256,
+        ot_cs_lambda: float = 0.0,
+        ot_cs_n_no: int = 15,
+        ot_cs_n_warmup: int = 30,
+        ot_cs_k: int = 256,
+        ot_cb_lambda: float = 0.0,
+        ot_cb_n_no: int = 15,
+        ot_cb_n_warmup: int = 30,
+        ot_cb_k: int = 256,
         ot_eps: float = 0.05,
         ot_iter: int = 50,
-        ot_plan_every_n_epochs: int = 1,
-        ot_loss_every_n_steps: int = 1,
+        ot_plan_every_n_epochs: int = 1, # invalid if 0
+        ot_loss_every_n_steps: int = 1,  # if 0, once per epoch (first batch)
     ):
         super().__init__()
         if device is not None:
@@ -490,10 +498,14 @@ class LightningProxModel(L.LightningModule):
         self.gene_align_lambda = gene_align_lambda
         self.gene_align_n_no = gene_align_n_no
         self.gene_align_n_warmup = gene_align_n_warmup
-        self.ot_lambda = ot_lambda
-        self.ot_n_no = ot_n_no
-        self.ot_n_warmup = ot_n_warmup
-        self.ot_k = ot_k
+        self.ot_cs_lambda = ot_cs_lambda
+        self.ot_cs_n_no = ot_cs_n_no
+        self.ot_cs_n_warmup = ot_cs_n_warmup
+        self.ot_cs_k = ot_cs_k
+        self.ot_cb_lambda = ot_cb_lambda
+        self.ot_cb_n_no = ot_cb_n_no
+        self.ot_cb_n_warmup = ot_cb_n_warmup
+        self.ot_cb_k = ot_cb_k
         self.ot_eps = ot_eps
         self.ot_iter = ot_iter
         self.ot_plan_every_n_epochs = ot_plan_every_n_epochs
@@ -521,14 +533,28 @@ class LightningProxModel(L.LightningModule):
             self._gene_pairs = MultiSampleGenePairs(idx0=self.gene_align_idx0, idx1=self.gene_align_idx1)
     
     def _register_ot_state(self):
-        if self.ot_lambda > 0:
+        # cross-sample OT state
+        if self.ot_cs_lambda > 0:
             if not hasattr(self.data["cell"], "sample"):
-                raise ValueError("ot_lambda > 0 requires data['cell'].sample")
+                raise ValueError("ot_cs_lambda > 0 requires data['cell'].sample")
             
             # not buffers; we'll compute OT related variables on the fly
-            self._ot_groups: dict[int, torch.Tensor] = build_sample_cell_index(self.data["cell"].sample)
-            self._ot_pairs: List[Tuple[int, int]] = make_all_sample_pairs(self._ot_groups.keys(), mode="all_pairs")
-            self._ot_states: List[PairOTState] = []
+            self._ot_cs_groups: dict[int, torch.Tensor] = build_sample_cell_index(self.data["cell"].sample)
+            self._ot_cs_pairs: List[Tuple[int, int]] = make_all_sample_pairs(self._ot_cs_groups.keys(), mode="all_pairs")
+            self._ot_cs_states: List[PairOTState] = []
+        
+        # cross-batch OT state
+        if self.ot_cb_lambda > 0:
+            if not hasattr(self.data["cell"], "batch_local"):
+                if not hasattr(self.data["cell"], "batch"):
+                    raise ValueError("ot_cb_lambda > 0 requires data['cell'].batch_local or data['cell'].batch")
+                else:
+                    if not hasattr(self.data["cell"], "sample"):
+                        self.data["cell"].sample = torch.zeros_like(self.data["cell"].batch)
+                    self.data["cell"].batch_local = chk._make_batch_local_from_global(self.data["cell"].sample, self.data["cell"].batch)
+            self._ot_cb_groups: dict[tuple[int, int], torch.Tensor] = build_sample_batch_cell_index(self.data["cell"].sample, self.data["cell"].batch_local)
+            self._ot_cb_pairs: dict[int, List[Tuple[int, int]]] = make_all_sample_batch_pairs(self._ot_cb_groups.keys(), mode="all_pairs")
+            self._ot_cb_states: List[PairOTStateKeyed] = []
 
     def _register_others(self):
         # self.register_buffer("cell_weights", self.cell_weights) # not used
@@ -805,10 +831,15 @@ class LightningProxModel(L.LightningModule):
         pairs = self._gene_pairs
         return gene_alignment_msd_loss(gene_mu, pairs)
 
-    def ot_alignment_loss(self) -> torch.Tensor:
+    def ot_alignment_loss(self, type: str) -> torch.Tensor:
         # current trainable mu (NOT detach) => gradients flow to those cells
         cell_mu = self.encoder.__mu_dict__["cell"]
-        return ot_cost_multi_sample(cell_mu, self._ot_states, P_detach=True)
+        if type == "cs":
+            return ot_cost_multi(cell_mu, self._ot_cs_states, P_detach=True)
+        elif type == "cb":
+            return ot_cost_multi(cell_mu, self._ot_cb_states, P_detach=True)
+        else:
+            raise ValueError(f"Unknown OT type={type}")
 
     def training_step(self, batch, batch_idx):
         # batch = batch.to(self.device)
@@ -863,7 +894,6 @@ class LightningProxModel(L.LightningModule):
                 )
             else:
                 herit_loss_value = torch.tensor(0.0, device=self.device)
-            t1 = time.time()
             self._log_metric("herit_loss", herit_loss_value, batch_size=bs_edges, on_step=True, on_epoch=True, prog_bar=False)
             self._log_perf("herit_loss", time.time() - t0, on_step=True)
         else:
@@ -879,17 +909,25 @@ class LightningProxModel(L.LightningModule):
             self._log_metric("gene_align_weighted", gene_align_weight * gene_align_loss, on_step=True, on_epoch=True, prog_bar=False)
 
         # ---- OT loss ----
-        compute_ot_now, ot_weight = self._compute_ot_now(return_weight=True)
+        compute_ot_cs_now, ot_cs_weight = self._compute_ot_cs_now(return_weight=True)
 
-        ot_loss = torch.tensor(0.0, device=self.device)
-        if compute_ot_now:
+        ot_cs_loss = torch.tensor(0.0, device=self.device)
+        if compute_ot_cs_now:
             t0 = time.time()
-            ot_loss = self.ot_alignment_loss()
-            t1 = time.time()
-            self._log_metric("ot_loss", ot_loss, batch_size=bs_edges, on_step=True, on_epoch=True, prog_bar=False)
-            self._log_metric("ot_weighted", ot_weight * ot_loss, on_step=True, on_epoch=True, prog_bar=False)
-            self._log_perf("ot_loss", time.time() - t0, on_step=True)
-
+            ot_cs_loss = self.ot_alignment_loss(type="cs")
+            self._log_metric("ot_cs_loss", ot_cs_loss, batch_size=bs_edges, on_step=True, on_epoch=True, prog_bar=False)
+            self._log_metric("ot_cs_weighted", ot_cs_weight * ot_cs_loss, on_step=True, on_epoch=True, prog_bar=False)
+            self._log_perf("ot_cs_loss", time.time() - t0, on_step=True)
+        
+        compute_ot_cb_now, ot_cb_weight = self._compute_ot_cb_now(return_weight=True)
+        ot_cb_loss = torch.tensor(0.0, device=self.device)
+        if compute_ot_cb_now:
+            t0 = time.time()
+            ot_cb_loss = self.ot_alignment_loss(type="cb")
+            self._log_metric("ot_cb_loss", ot_cb_loss, batch_size=bs_edges, on_step=True, on_epoch=True, prog_bar=False)
+            self._log_metric("ot_cb_weighted", ot_cb_weight * ot_cb_loss, on_step=True, on_epoch=True, prog_bar=False)
+            self._log_perf("ot_cb_loss", time.time() - t0, on_step=True)
+        
         loss = (
             batch_nll_loss
             + kl_weight * batch_kl_div_loss
@@ -897,7 +935,8 @@ class LightningProxModel(L.LightningModule):
             + herit_loss_value
             # + aux_reg_loss
             + gene_align_weight * gene_align_loss
-            + ot_weight * ot_loss
+            + ot_cs_weight * ot_cs_loss
+            + ot_cb_weight * ot_cb_loss
         )
 
         self._log_metric("loss", loss, batch_size=bs_edges, on_step=True, on_epoch=True, prog_bar=True)
@@ -908,28 +947,6 @@ class LightningProxModel(L.LightningModule):
             self._debug_embeddings_only(mu_dict, logstd_dict)
 
         self.local_step += 1
-
-        # if self.local_step == 1: #DEBUG
-        #     batch_edge_num = bs_edges
-        #     batch_cell_node_num = batch["cell"].num_nodes
-        #     batch_gene_node_num = batch["gene"].num_nodes
-        #     batch_total_nll = batch_nll_loss.item()
-        #     batch_total_kl = batch_kl_div_loss.item()
-        #     batch_kl_weight = kl_weight
-        #     batch_total_gene_align_loss = gene_align_loss.item()
-        #     batch_gene_align_weight = gene_align_weight
-        #     batch_total_ot_loss = ot_loss.item()
-        #     batch_ot_weight = ot_weight
-
-        #     self.logger2.info(
-        #         "\n\n"
-        #         f"Epoch {self.current_epoch}, Step {self.global_step} - TRAINING Batch Info: \n"
-        #         f"Edges: {batch_edge_num}, Cells: {batch_cell_node_num}, Genes: {batch_gene_node_num}, \n"
-        #         f"NLL: {batch_total_nll}, KL: {batch_total_kl} (weight: {batch_kl_weight}), \n"
-        #         f"Gene Align: {batch_total_gene_align_loss} (weight: {batch_gene_align_weight}), \n"
-        #         f"OT: {batch_total_ot_loss} (weight: {batch_ot_weight})"
-        #         "\n\n"
-        #     )
 
         return loss
 
@@ -1110,48 +1127,36 @@ class LightningProxModel(L.LightningModule):
             self._log_metric("gene_align_weighted", gene_align_weight * gene_align_loss, on_step=False, on_epoch=True, prog_bar=False)
 
         # ---- OT loss ----
-        compute_ot_now, ot_weight = self._compute_ot_now(return_weight=True)
+        compute_ot_cs_now, ot_cs_weight = self._compute_ot_cs_now(return_weight=True)
 
-        ot_loss = torch.tensor(0.0, device=self.device)
-        if compute_ot_now:
-            ot_loss = self.ot_alignment_loss()
-            self._log_metric("ot_loss", ot_loss, batch_size=bs_edges, on_step=False, on_epoch=True, prog_bar=False)
-            self._log_metric("ot_weighted", ot_weight * ot_loss, on_step=False, on_epoch=True, prog_bar=False)
-       
+        ot_cs_loss = torch.tensor(0.0, device=self.device)
+        if compute_ot_cs_now:
+            t0 = time.time()
+            ot_cs_loss = self.ot_alignment_loss(type="cs")
+            self._log_metric("ot_cs_loss", ot_cs_loss, batch_size=bs_edges, on_step=False, on_epoch=True, prog_bar=False)
+            self._log_metric("ot_cs_weighted", ot_cs_weight * ot_cs_loss, on_step=False, on_epoch=True, prog_bar=False)
+        
+        compute_ot_cb_now, ot_cb_weight = self._compute_ot_cb_now(return_weight=True)
+        ot_cb_loss = torch.tensor(0.0, device=self.device)
+        if compute_ot_cb_now:
+            t0 = time.time()
+            ot_cb_loss = self.ot_alignment_loss(type="cb")
+            self._log_metric("ot_cb_loss", ot_cb_loss, batch_size=bs_edges, on_step=False, on_epoch=True, prog_bar=False)
+            self._log_metric("ot_cb_weighted", ot_cb_weight * ot_cb_loss, on_step=False, on_epoch=True, prog_bar=False)
+
         loss = (
             batch_nll_loss + 
             kl_weight * batch_kl_div_loss + 
             herit_loss_value
             + gene_align_weight * gene_align_loss
-            + ot_weight * ot_loss
+            + ot_cs_weight * ot_cs_loss
+            + ot_cb_weight * ot_cb_loss
         )
 
         self._log_metric("loss", loss, batch_size=bs_edges, on_step=False, on_epoch=True, prog_bar=True)
 
         self.validation_step_outputs.append(loss)
         self.local_step_val += 1
-
-        # if self.local_step_val == 1: #DEBUG
-        #     batch_edge_num = bs_edges
-        #     batch_cell_node_num = batch["cell"].num_nodes
-        #     batch_gene_node_num = batch["gene"].num_nodes
-        #     batch_total_nll = batch_nll_loss.item()
-        #     batch_total_kl = batch_kl_div_loss.item()
-        #     batch_kl_weight = kl_weight
-        #     batch_total_gene_align_loss = gene_align_loss.item()
-        #     batch_gene_align_weight = gene_align_weight
-        #     batch_total_ot_loss = ot_loss.item()
-        #     batch_ot_weight = ot_weight
-
-        #     self.logger2.info(
-        #         "\n\n"
-        #         f"Epoch {self.current_epoch}, Step {self.global_step} - VALIDATION Batch Info: \n"
-        #         f"Edges: {batch_edge_num}, Cells: {batch_cell_node_num}, Genes: {batch_gene_node_num}, \n"
-        #         f"NLL: {batch_total_nll}, KL: {batch_total_kl} (weight: {batch_kl_weight}), \n"
-        #         f"Gene Align: {batch_total_gene_align_loss} (weight: {batch_gene_align_weight}), \n"
-        #         f"OT: {batch_total_ot_loss} (weight: {batch_ot_weight})"
-        #         "\n\n"
-        #     )
 
         return loss
 
@@ -1193,42 +1198,71 @@ class LightningProxModel(L.LightningModule):
             return compute_gene_align_now
 
     def _compute_ot_plan(self):
-        if self.ot_lambda > 0:
-            # No need to calculate OT plan when weight = 0
-            ot_scale = self._linear_warmup_scale(self.ot_n_no, self.ot_n_warmup)
-            need_plan = (ot_scale > 0) and (self.current_epoch % self.ot_plan_every_n_epochs == 0)
+        need_plan = self.current_epoch % self.ot_plan_every_n_epochs == 0
+        ot_cs_weight = self.ot_cs_lambda * self._linear_warmup_scale(self.ot_cs_n_no, self.ot_cs_n_warmup)
+        ot_cb_weight = self.ot_cb_lambda * self._linear_warmup_scale(self.ot_cb_n_no, self.ot_cb_n_warmup)
 
-            if need_plan:
-                t0 = time.time()
-                with torch.no_grad():
-                    cell_mu = self.encoder.__mu_dict__["cell"].detach()
-                    self._ot_states = compute_multi_sample_ot_states(
-                        cell_mu=cell_mu,
-                        groups=self._ot_groups,
-                        pairs=self._ot_pairs,
-                        subset_size=self.ot_k,
-                        eps=self.ot_eps,
-                        n_iters=self.ot_iter,
-                    )
+        if ot_cs_weight > 0 and need_plan:
+            t0 = time.time()
+            with torch.no_grad():
+                cell_mu = self.encoder.__mu_dict__["cell"].detach()
+                self._ot_cs_states = compute_multi_sample_ot_states(
+                    cell_mu=cell_mu,
+                    groups=self._ot_cs_groups,
+                    pairs=self._ot_cs_pairs,
+                    subset_size=self.ot_cs_k,
+                    eps=self.ot_eps,
+                    n_iters=self.ot_iter,
+                )
+            t1 = time.time()
+            self.log("time:ot_cs_plan", t1 - t0, on_step=False, on_epoch=True)
+        
+        if ot_cb_weight > 0 and need_plan:
+            t0 = time.time()
+            with torch.no_grad():
+                cell_mu = self.encoder.__mu_dict__["cell"].detach()
+                self._ot_cb_states = compute_multi_batch_ot_states(
+                    cell_mu=cell_mu,
+                    groups_sb=self._ot_cb_groups,
+                    pairs_sb=self._ot_cb_pairs,
+                    subset_size=self.ot_cb_k,
+                    eps=self.ot_eps,
+                    n_iters=self.ot_iter,
+                )
+            t1 = time.time()
+            self.log("time:ot_cb_plan", t1 - t0, on_step=False, on_epoch=True)
 
-                t1 = time.time()
-                self.log("time:ot_plan", t1 - t0, on_step=False, on_epoch=True)
-
-    def _compute_ot_now(self, return_weight=False):
-        """Decide whether to compute OT loss for this training/validation step."""
-        ot_weight = self.ot_lambda * self._linear_warmup_scale(self.ot_n_no, self.ot_n_warmup)
-        compute_ot_now = False
-        if ot_weight > 0 and hasattr(self, "_ot_states") and self._ot_states is not None and len(self._ot_states) > 0:
+    def _compute_ot_cs_now(self, return_weight=False):
+        """Decide whether to compute cross-sample OT loss for this training/validation step."""
+        ot_cs_weight = self.ot_cs_lambda * self._linear_warmup_scale(self.ot_cs_n_no, self.ot_cs_n_warmup)
+        compute_ot_cs_now = False
+        if ot_cs_weight > 0 and hasattr(self, "_ot_cs_states") and self._ot_cs_states is not None and len(self._ot_cs_states) > 0:
             step = self.local_step if self.training else self.local_step_val
             if self.ot_loss_every_n_steps > 0:
-                compute_ot_now = (step % self.ot_loss_every_n_steps == 0)
+                compute_ot_cs_now = (step % self.ot_loss_every_n_steps == 0)
             else:
                 # default: once per epoch (first batch)
-                compute_ot_now = (step == 0)
+                compute_ot_cs_now = (step == 0)
         if return_weight:
-            return compute_ot_now, ot_weight
+            return compute_ot_cs_now, ot_cs_weight
         else:
-            return compute_ot_now
+            return compute_ot_cs_now
+    
+    def _compute_ot_cb_now(self, return_weight=False):
+        """Decide whether to compute cross-batch OT loss for this training/validation step."""
+        ot_cb_weight = self.ot_cb_lambda * self._linear_warmup_scale(self.ot_cb_n_no, self.ot_cb_n_warmup)
+        compute_ot_cb_now = False
+        if ot_cb_weight > 0 and hasattr(self, "_ot_cb_states") and self._ot_cb_states is not None and len(self._ot_cb_states) > 0:
+            step = self.local_step if self.training else self.local_step_val
+            if self.ot_loss_every_n_steps > 0:
+                compute_ot_cb_now = (step % self.ot_loss_every_n_steps == 0)
+            else:
+                # default: once per epoch (first batch)
+                compute_ot_cb_now = (step == 0)
+        if return_weight:
+            return compute_ot_cb_now, ot_cb_weight
+        else:
+            return compute_ot_cb_now
 
     def on_train_epoch_start(self):
         self.validation_step_outputs = []
