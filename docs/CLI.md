@@ -5,8 +5,8 @@ Run `python -m simba_plus.simba_plus <subcommand> -h` for usage examples.
 ```
 usage: simba+ load_data [-h] [--gene-adata GENE_ADATA [GENE_ADATA ...]]
                         [--peak-adata PEAK_ADATA]
-                        [--batch-col BATCH_COL [BATCH_COL ...]] --out-path
-                        OUT_PATH
+                        [--batch-col BATCH_COL [BATCH_COL ...]]
+                        --out-path OUT_PATH
 
 Prepare a HeteroData object from AnnData of RNA-seq and ATAC-seq data.
 
