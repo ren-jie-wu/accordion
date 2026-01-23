@@ -1,4 +1,4 @@
-# <img src="docs/assets/accordion_icon.png" alt="accordion" height="110"/> **ACCORDION**
+# <img src="docs/assets/accordion_icon.png" alt="accordion" height="110"/>
 
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/ren-jie-wu/accordion)
 [![CI](https://github.com/ren-jie-wu/accordion/actions/workflows/ci.yml/badge.svg)](https://github.com/ren-jie-wu/accordion/actions/workflows/ci.yml)
@@ -12,7 +12,7 @@ See the original SIMBA+ code [here](https://github.com/pinellolab/simba-plus).
 
 ## Installation
 ```
-git clone -b dev git@github.com:ren-jie-wu/accordion.git
+git clone git@github.com:ren-jie-wu/accordion.git
 cd accordion
 pip install .
 ```
