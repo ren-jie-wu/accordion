@@ -275,6 +275,18 @@
 </span><span id="L-213"><a href="#L-213"><span class="linenos">213</span></a>                <span class="n">msgs</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="s2">&quot;Generated cell.batch from cell.batch_local since cell.batch is missing&quot;</span><span class="p">)</span>
 </span><span id="L-214"><a href="#L-214"><span class="linenos">214</span></a>        
 </span><span id="L-215"><a href="#L-215"><span class="linenos">215</span></a>        <span class="k">return</span> <span class="n">ok</span><span class="p">,</span> <span class="n">msgs</span>
+</span><span id="L-216"><a href="#L-216"><span class="linenos">216</span></a>
+</span><span id="L-217"><a href="#L-217"><span class="linenos">217</span></a>
+</span><span id="L-218"><a href="#L-218"><span class="linenos">218</span></a><span class="k">class</span><span class="w"> </span><span class="nc">_logger</span><span class="p">:</span>
+</span><span id="L-219"><a href="#L-219"><span class="linenos">219</span></a>    <span class="nd">@classmethod</span>
+</span><span id="L-220"><a href="#L-220"><span class="linenos">220</span></a>    <span class="k">def</span><span class="w"> </span><span class="nf">info</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">msg</span><span class="p">,</span> <span class="o">*</span><span class="n">args</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">):</span>
+</span><span id="L-221"><a href="#L-221"><span class="linenos">221</span></a>        <span class="nb">print</span><span class="p">(</span><span class="n">msg</span><span class="p">)</span>
+</span><span id="L-222"><a href="#L-222"><span class="linenos">222</span></a>    <span class="nd">@classmethod</span>
+</span><span id="L-223"><a href="#L-223"><span class="linenos">223</span></a>    <span class="k">def</span><span class="w"> </span><span class="nf">warning</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">msg</span><span class="p">,</span> <span class="o">*</span><span class="n">args</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">):</span>
+</span><span id="L-224"><a href="#L-224"><span class="linenos">224</span></a>        <span class="nb">print</span><span class="p">(</span><span class="n">msg</span><span class="p">)</span>
+</span><span id="L-225"><a href="#L-225"><span class="linenos">225</span></a>    <span class="nd">@classmethod</span>
+</span><span id="L-226"><a href="#L-226"><span class="linenos">226</span></a>    <span class="k">def</span><span class="w"> </span><span class="nf">error</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">msg</span><span class="p">,</span> <span class="o">*</span><span class="n">args</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">):</span>
+</span><span id="L-227"><a href="#L-227"><span class="linenos">227</span></a>        <span class="nb">print</span><span class="p">(</span><span class="n">msg</span><span class="p">)</span>
 </span></pre></div>
 
 
