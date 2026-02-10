@@ -68,6 +68,7 @@ class CustomNSMultiIndexDataset(Dataset):
         self.setup_count = 0
         self.negative_sampling_fold = negative_sampling_fold
         self.data = data
+        self.full_data = copy(data)
         if negative_sampling_fold == 0: # No negative sampling; use all positive edges and permute them
             self.edge_index_dict = self.pos_idx_dict
             print("Permuting edges...")
