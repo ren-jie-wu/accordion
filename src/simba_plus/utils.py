@@ -18,6 +18,7 @@ from simba_plus.loader import (
     collate_graph,
     collate,
 )
+from simba_plus.util_modules import _logger
 import logging
 import sys
 from pathlib import Path
@@ -66,19 +67,22 @@ class MyDataModule(L.LightningDataModule):
     so that negative edges are resampled once per epoch. The returned DataLoader
     then yields batched subgraphs built via the custom `collate` function.
     """
-    def __init__(self, train_loader, val_loader):
+    def __init__(self, train_loader, val_loader, resample: bool = True):
         super().__init__()
         self.train_loader = train_loader
         self.val_loader = val_loader
+        self.resample = resample
 
     def train_dataloader(self):
         """Resample negative edges for training and return the DataLoader."""
-        self.train_loader.dataset.sample_negative()
+        if self.resample:
+            self.train_loader.dataset.sample_negative()
         return self.train_loader
 
     def val_dataloader(self):
         """Resample negative edges for validation and return the DataLoader."""
-        self.val_loader.dataset.sample_negative()
+        if self.resample:
+            self.val_loader.dataset.sample_negative()
         return self.val_loader
 
 
@@ -276,11 +280,12 @@ def get_edge_split_data(data, data_path, edge_types, negative_sampling_fold, log
 def get_edge_split_datamodule(
     data,
     data_path,
-    edge_types,
     batch_size,
-    num_workers,
-    negative_sampling_fold,
-    logger,
+    edge_types = None,
+    num_workers = 1,
+    negative_sampling_fold = 0,
+    logger = None,
+    resample: bool = True,
 ):
     """
     Build a Lightning DataModule for training and validation on a 
@@ -302,12 +307,18 @@ def get_edge_split_datamodule(
         Number of negatives per positive edge used by the dataset.
     logger : logging.Logger
         Logger for reporting progress.
-
+    resample : bool
+        Whether to resample negative edges for training and validation.
     Returns
     -------
     MyDataModule
         Lightning DataModule providing train/validation dataloaders.
     """
+    if edge_types is None:
+        edge_types = data.edge_types
+    if logger is None:
+        logger = _logger()
+    
     train_data, val_data = get_edge_split_data(
         data=data,
         edge_types=edge_types,
@@ -331,7 +342,7 @@ def get_edge_split_datamodule(
         batch_size=batch_size,
         num_workers=num_workers,
     )
-    pldata = MyDataModule(train_loader, val_loader)
+    pldata = MyDataModule(train_loader, val_loader, resample=resample)
     return pldata
 
 

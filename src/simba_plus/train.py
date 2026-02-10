@@ -38,6 +38,7 @@ from simba_plus.utils import (
     get_node_weights,
     get_nll_scales,
 )
+from simba_plus.util_modules import _logger
 from simba_plus.heritability.get_residual import (
     get_residual,
     get_peak_residual,
@@ -128,10 +129,10 @@ def run(
     sumstats: Optional[str] = None,
     sumstats_lam: float = 1.0,
     early_stopping_steps: int = 10,
-    max_epochs: int = 1000,
+    max_epochs: int = 100,
     verbose: bool = False,
     negative_sampling_fold: int = 1,
-    batch_negative: bool = True,
+    batch_negative: bool = False,
     no_wandb: bool = False,
 
     gene_align_lambda: float = 0.0,
@@ -147,6 +148,9 @@ def run(
     ot_cb_k: int = 256,
     ot_eps: float = 0.05,
     ot_iter: int = 50,
+
+    # DEBUG
+    resample: bool = False,
 ):
     """
     Train the model with the given parameters.
@@ -157,7 +161,7 @@ def run(
         adata_CG (str): The path to the cell adata file. Only used to provide cell metadata and gene metadata.
         adata_CP (str): The path to the peak adata file. Only used to provide cell metadata (if not provided in adata_CG) and peak metadata.
         batch_size (int): The batch size of edges for the DataLoader. If batch_negative is True, this is the number of positive edges per batch.
-        batch_negative (bool, default=True): If True, datamodule construction will not do negative sampling; instead, negative sampling will be done in each training step and validation step.
+        batch_negative (bool, default=False): If True, datamodule construction will not do negative sampling; instead, negative sampling will be done in each training step and validation step.
         output_dir (str): The output directory.
         sumstats (str): The path to a TSV file with trait name and path to GWAS summary statistics file per line.
         sumstats_lam (float): The weight of the loss for sumstats residual.
@@ -169,7 +173,7 @@ def run(
         get_adata (bool, default=False): If True, only fetch the last checkpoint, save AnnData outputs and exit.
         num_workers (int, default=2): The number of workers for data loading and LDSC.
         early_stopping_steps (int, default=10): The number of epochs for early stopping patience.
-        max_epochs (int, default=1000): The number of max epochs for training.
+        max_epochs (int, default=100): The number of max epochs for training.
         verbose (bool, default=False): If True, enables verbose logging.
         
         # other parameters
@@ -219,6 +223,13 @@ def run(
     
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     logger.info(f"Run ID: {run_id}")
+    kl_param_str = f"kl_lambda={kl_lambda}, kl_n_no={kl_n_no}, kl_n_warmup={kl_n_warmup}, " if kl_lambda != 0 else f"kl_lambda=0, "
+    gene_align_param_str = f"gene_align_lambda={gene_align_lambda}, gene_align_n_no={gene_align_n_no}, gene_align_n_warmup={gene_align_n_warmup}, " if gene_align_lambda != 0 else f"gene_align_lambda=0, "
+    ot_cs_param_str = f"ot_cs_lambda={ot_cs_lambda}, ot_cs_n_no={ot_cs_n_no}, ot_cs_n_warmup={ot_cs_n_warmup}, ot_cs_k={ot_cs_k}, " if ot_cs_lambda != 0 else f"ot_cs_lambda=0, "
+    ot_cb_param_str = f"ot_cb_lambda={ot_cb_lambda}, ot_cb_n_no={ot_cb_n_no}, ot_cb_n_warmup={ot_cb_n_warmup}, ot_cb_k={ot_cb_k}, " if ot_cb_lambda != 0 else f"ot_cb_lambda=0, "
+    ot_param_str = f"ot_eps={ot_eps}, ot_iter={ot_iter}, " if ot_cs_lambda != 0 or ot_cb_lambda != 0 else ""
+    logger.info(f"Parameters: batch_size={batch_size}, negative_sampling_fold={negative_sampling_fold}, batch_negative={batch_negative}, hidden_dims={hidden_dims}, max_epochs={max_epochs}, " \
+        f"{kl_param_str}{gene_align_param_str}{ot_cs_param_str}{ot_cb_param_str}{ot_param_str}")
     logger.info(f"Using {device} as device...")
     if device.type == "cuda":
         logger.warning("If you want to disable GPU, run `export CUDA_VISIBLE_DEVICES=''` before training.")
@@ -254,11 +265,12 @@ def run(
     pldata = get_edge_split_datamodule(
         data=data,  # ToDevice(device)(data),
         data_path=data_path,
-        edge_types=edge_types,
         batch_size=batch_size,
+        edge_types=edge_types,
         num_workers=num_workers,
         negative_sampling_fold=0 if batch_negative else negative_sampling_fold,
         logger=logger,
+        resample=resample,
     )
 
     # calculate some model parameters
@@ -305,7 +317,7 @@ def run(
     else:
         herit_loss = None
     
-    MONITOR_KEY = "val/nll"
+    MONITOR_KEY = "val/loss"
     
     rpvgae = LightningProxModel(
         data,
@@ -387,7 +399,7 @@ def run(
             checkpoint_dir,
             monitor=MONITOR_KEY,
             mode="min",
-            save_last=False,
+            save_last=True,
             save_top_k=1,
         )
         lrmonitor_callback = LearningRateMonitor()
@@ -496,6 +508,8 @@ def save_files(
     adata_CP = ad.read_h5ad(peak_adata) if peak_adata is not None else None
     if last_model_path is None:
         last_model_path = get_last_model_path(f"{run_id}.checkpoints", checkpoint_suffix)
+    if logger is None:
+        logger = _logger()
     logger.info(
         f"Saving model outputs from checkpoint {last_model_path} into into AnnDatas..."
     )
@@ -680,7 +694,7 @@ def add_argument(parser):
     )
     parser.add_argument(
         "--negative-sampling-fold",
-        type=int,
+        type=float,
         default=1,
         help="Fold of negative samples to use during training",
     )
@@ -727,7 +741,7 @@ def add_argument(parser):
     parser.add_argument(
         "--max-epochs",
         type=int,
-        default=1000,
+        default=100,
         help="Number of max epochs for training",
     )
     parser.add_argument(

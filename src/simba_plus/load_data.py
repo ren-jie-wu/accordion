@@ -203,7 +203,8 @@ def make_sc_HetData_multi_rna(
     _check_no_duplicates(genes_list)
     union_genes = sorted(set().union(*[set(genes) for genes in genes_list if len(genes) > 0]))
     gene_to_id = {gene: i for i, gene in enumerate(union_genes)} # common gene names for future gene alignment use
-    
+    print(f"Number of genes: {len(union_genes)}")
+
     # ############ save union genes for future gene alignment use ############
     # if out_path is not None:
     #     out_dir = os.path.dirname(out_path)
@@ -213,6 +214,7 @@ def make_sc_HetData_multi_rna(
     
     g_list = [adata.n_vars if adata is not None else 0 for adata in adata_CG_list]
     n_list = [adata.n_obs if adata is not None else 0 for adata in adata_CG_list]
+    print(f"Number of cells: {sum(n_list)}")
 
     if sum(g_list) == 0 or sum(n_list) == 0:
         raise ValueError("No genes or cells found in the RNA-seq datasets")
@@ -247,6 +249,7 @@ def make_sc_HetData_multi_rna(
                 offset += 1
         data["cell"].batch_local = batch_local_all
         data["cell"].batch = batch_global_all
+        print(f"Total number of batches: {offset}")
 
     data["cell"].sample = torch.cat(
         [torch.full((n,), i, dtype=torch.long) for i, n in enumerate(n_list) if n > 0],
@@ -304,6 +307,7 @@ def make_sc_HetData_multi_rna(
         edge_dist = "Normal"
     else:
         edge_dist = "Normal"
+    print(f"Edge distribution: {edge_dist}")
 
     data[edge_type].edge_index = edge_index
     data[edge_type].edge_attr = edge_attr
@@ -360,6 +364,7 @@ def main(args):
         print("No gene adatas provided.")
         gene_adatas = None
     else:
+        print(f"Loading gene adatas...")
         gene_adatas = []
         for gene_path in gene_paths:
             try:
@@ -368,6 +373,7 @@ def main(args):
             except Exception as e:
                 print(f"Skipping {gene_path} due to error: {e}")
                 gene_adatas.append(None)
+        print(f"Done. Loaded {len(gene_adatas)} gene adatas.")
     
     dat = make_sc_HetData_multi_rna(
         adata_CG_list=gene_adatas,

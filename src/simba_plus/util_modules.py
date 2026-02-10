@@ -214,3 +214,14 @@ class _CheckHeteroDataCodes:
         
         return ok, msgs
 
+
+class _logger:
+    @classmethod
+    def info(cls, msg, *args, **kwargs):
+        print(msg)
+    @classmethod
+    def warning(cls, msg, *args, **kwargs):
+        print(msg)
+    @classmethod
+    def error(cls, msg, *args, **kwargs):
+        print(msg)

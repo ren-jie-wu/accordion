@@ -29,7 +29,7 @@ from simba_plus._utils import (
     make_key,
     update_lr,
 )
-from simba_plus.util_modules import BufferDict, _CheckHeteroDataCodes as chk
+from simba_plus.util_modules import BufferDict, _CheckHeteroDataCodes as chk, _logger
 from simba_plus.negative_sampling import negative_sampling_same_sample_bipartite
 from simba_plus.loss.gene_alignment import (
     TwoSampleGenePairs, 
@@ -94,7 +94,7 @@ class _PerSampleBatchedParam(nn.Module):
 
 
 class AuxParams(nn.Module):
-    def __init__(self, data: HeteroData, edgetype_specific: bool = True, check_data: bool = False) -> None:
+    def __init__(self, data: HeteroData, edgetype_specific: bool = True, check_data: bool = False, use_noise: bool = True) -> None:
         """
         Prepare parameter dictionaries with batch correction for RNA-seq data
         
@@ -118,6 +118,10 @@ class AuxParams(nn.Module):
         """
         super().__init__()
         self.edgetype_specific = edgetype_specific
+        self.use_noise = use_noise
+
+        srcs, dsts = zip(*[(src, dst) for src, _, dst in data.edge_types])
+        assert set(srcs) <= {"cell"} and set(dsts) <= {"gene", "peak"}, "Only cell-gene and cell-peak edges are supported"
 
         if check_data:
             ok, msgs = chk.check_heterodata(data)
@@ -241,7 +245,7 @@ class AuxParams(nn.Module):
         Returns:
             Stochastic parameters, shape: (num_batches, num_nodes)
         """
-        if self.training and self.use_batch:
+        if self.use_noise and self.training and self.use_batch:
             assert param.dim() == 2, f"param must be a 2D tensor when use_batch is True, but got {param.dim()}D tensor"
             if param.size(0) <= 1:
                 return param
@@ -417,6 +421,10 @@ class LightningProxModel(L.LightningModule):
         ot_iter: int = 50,
         ot_plan_every_n_epochs: int = 1, # invalid if 0
         ot_loss_every_n_steps: int = 1,  # if 0, once per epoch (first batch)
+
+        # DEBUG
+        use_aux: bool = True,
+        use_aux_noise: bool = False,
     ):
         super().__init__()
         if device is not None:
@@ -427,17 +435,6 @@ class LightningProxModel(L.LightningModule):
         # self.nonneg = nonneg
         self.data = data
         self.logger2 = logger
-
-        class _logger:
-            @classmethod
-            def info(cls, msg, *args, **kwargs):
-                print(msg)
-            @classmethod
-            def warning(cls, msg, *args, **kwargs):
-                print(msg)
-            @classmethod
-            def error(cls, msg, *args, **kwargs):
-                print(msg)
         
         if self.logger2 is None:
             self.logger2 = _logger() # fallback to print
@@ -489,7 +486,12 @@ class LightningProxModel(L.LightningModule):
         self.num_neg_samples_fold = num_neg_samples_fold
         self.validation_step_outputs = []
         self.aux_params = AuxParams(data, edgetype_specific=edgetype_specific, 
-                                    check_data=False) # already checked above
+                                    check_data=False,  # already checked above
+                                    use_noise=use_aux_noise    # DEBUG
+        )
+        if not use_aux:
+            self._freeze_aux_params()
+
         self.verbose = verbose
         self.batch_negative = batch_negative
 
@@ -514,6 +516,12 @@ class LightningProxModel(L.LightningModule):
         self._register_gene_pairs()
         self._register_ot_state()
         self._register_others()
+
+        self.log_every_n_steps = 50
+    
+    def _freeze_aux_params(self):
+        for param in self.aux_params.parameters():
+            param.requires_grad_(False)
     
     def _register_gene_pairs(self):
         if self.gene_align_lambda > 0:
@@ -863,12 +871,13 @@ class LightningProxModel(L.LightningModule):
         )
 
         self._log_metric("nll", batch_nll_loss, batch_size=bs_edges, on_step=True, on_epoch=True, prog_bar=False)
-        self._log_perf("nll", time.time() - t0, on_step=True)
-        for edge_type, nll_w in weighted_nll_dict.items():
-            edge_key = self._edge_type_key(edge_type)
-            edge_bs = int(batch[edge_type].edge_index.size(1))
-            self._log_metric(f"nll/{edge_key}", nll_w, batch_size=edge_bs, on_step=False, on_epoch=True, prog_bar=False)
-
+        # self._log_perf("nll", time.time() - t0, on_step=True)
+        if len(weighted_nll_dict) > 1:
+            for edge_type, nll_w in weighted_nll_dict.items():
+                edge_key = self._edge_type_key(edge_type)
+                edge_bs = int(batch[edge_type].edge_index.size(1))
+                self._log_metric(f"nll/{edge_key}", nll_w, batch_size=edge_bs, on_step=False, on_epoch=True, prog_bar=False)
+        
         # ---- KL ----
         compute_kl_now, kl_weight = self._compute_kl_now(return_weight=True)
         batch_kl_div_loss = torch.tensor(0.0, device=self.device)
@@ -881,7 +890,7 @@ class LightningProxModel(L.LightningModule):
                 node_weights_dict=self.node_weights_dict,
             )
             self._log_metric("kl", batch_kl_div_loss, batch_size=bs_edges, on_step=True, on_epoch=True, prog_bar=False)
-            self._log_metric("kl_weighted", kl_weight * batch_kl_div_loss, on_step=True, on_epoch=True, prog_bar=False)
+            self._log_metric("kl_weighted", kl_weight * batch_kl_div_loss, batch_size=bs_edges, on_step=True, on_epoch=True, prog_bar=False)
         
         # ---- Herit Loss ----
         if self.herit_loss is not None:
@@ -895,7 +904,7 @@ class LightningProxModel(L.LightningModule):
             else:
                 herit_loss_value = torch.tensor(0.0, device=self.device)
             self._log_metric("herit_loss", herit_loss_value, batch_size=bs_edges, on_step=True, on_epoch=True, prog_bar=False)
-            self._log_perf("herit_loss", time.time() - t0, on_step=True)
+            # self._log_perf("herit_loss", time.time() - t0, on_step=True)
         else:
             herit_loss_value = torch.tensor(0.0, device=self.device)
         
@@ -906,7 +915,7 @@ class LightningProxModel(L.LightningModule):
         if compute_gene_align_now:
             gene_align_loss = self.gene_alignment_loss()
             self._log_metric("gene_align", gene_align_loss, batch_size=bs_edges, on_step=True, on_epoch=True, prog_bar=False)
-            self._log_metric("gene_align_weighted", gene_align_weight * gene_align_loss, on_step=True, on_epoch=True, prog_bar=False)
+            self._log_metric("gene_align_weighted", gene_align_weight * gene_align_loss, batch_size=bs_edges, on_step=True, on_epoch=True, prog_bar=False)
 
         # ---- OT loss ----
         compute_ot_cs_now, ot_cs_weight = self._compute_ot_cs_now(return_weight=True)
@@ -916,8 +925,8 @@ class LightningProxModel(L.LightningModule):
             t0 = time.time()
             ot_cs_loss = self.ot_alignment_loss(type="cs")
             self._log_metric("ot_cs_loss", ot_cs_loss, batch_size=bs_edges, on_step=True, on_epoch=True, prog_bar=False)
-            self._log_metric("ot_cs_weighted", ot_cs_weight * ot_cs_loss, on_step=True, on_epoch=True, prog_bar=False)
-            self._log_perf("ot_cs_loss", time.time() - t0, on_step=True)
+            self._log_metric("ot_cs_weighted", ot_cs_weight * ot_cs_loss, batch_size=bs_edges, on_step=True, on_epoch=True, prog_bar=False)
+            # self._log_perf("ot_cs_loss", time.time() - t0, on_step=True)
         
         compute_ot_cb_now, ot_cb_weight = self._compute_ot_cb_now(return_weight=True)
         ot_cb_loss = torch.tensor(0.0, device=self.device)
@@ -925,8 +934,8 @@ class LightningProxModel(L.LightningModule):
             t0 = time.time()
             ot_cb_loss = self.ot_alignment_loss(type="cb")
             self._log_metric("ot_cb_loss", ot_cb_loss, batch_size=bs_edges, on_step=True, on_epoch=True, prog_bar=False)
-            self._log_metric("ot_cb_weighted", ot_cb_weight * ot_cb_loss, on_step=True, on_epoch=True, prog_bar=False)
-            self._log_perf("ot_cb_loss", time.time() - t0, on_step=True)
+            self._log_metric("ot_cb_weighted", ot_cb_weight * ot_cb_loss, batch_size=bs_edges, on_step=True, on_epoch=True, prog_bar=False)
+            # self._log_perf("ot_cb_loss", time.time() - t0, on_step=True)
         
         loss = (
             batch_nll_loss
@@ -940,9 +949,9 @@ class LightningProxModel(L.LightningModule):
         )
 
         self._log_metric("loss", loss, batch_size=bs_edges, on_step=True, on_epoch=True, prog_bar=True)
-        self._log_perf("step_total", time.time() - t_all0, on_step=True)
+        # self._log_perf("step_total", time.time() - t_all0, on_step=True)
 
-        # Debug: Monitor gradients and embeddings every 100 steps
+        # Debug: Monitor gradients and embeddings every 10 steps
         if self.current_epoch % 10 == 0 and self.local_step == 0 and self.verbose:
             self._debug_embeddings_only(mu_dict, logstd_dict)
 
@@ -956,8 +965,7 @@ class LightningProxModel(L.LightningModule):
         # Gradient clipping to prevent aux_params from dominating
         # torch.nn.utils.clip_grad_norm_(self.aux_params.parameters(), max_norm=1.0)
 
-        # Only check gradients every 100 steps to avoid spam
-        if self.current_epoch % 10 == 0 and self.local_step == 0 and self.verbose:
+        if self.current_epoch % 10 == 0 and self.local_step == 1 and self.verbose:
             self._debug_gradients()
 
     def _debug_embeddings_only(self, mu_dict, logstd_dict):
@@ -1084,10 +1092,11 @@ class LightningProxModel(L.LightningModule):
         )
 
         self._log_metric("nll", batch_nll_loss, batch_size=bs_edges, on_step=False, on_epoch=True, prog_bar=False)
-        for edge_type, nll_w in weighted_nll_dict.items():
-            edge_key = self._edge_type_key(edge_type)
-            edge_bs = int(batch[edge_type].edge_index.size(1))
-            self._log_metric(f"nll/{edge_key}", nll_w, batch_size=edge_bs, on_step=False, on_epoch=True, prog_bar=False)
+        if len(weighted_nll_dict) > 1:
+            for edge_type, nll_w in weighted_nll_dict.items():
+                edge_key = self._edge_type_key(edge_type)
+                edge_bs = int(batch[edge_type].edge_index.size(1))
+                self._log_metric(f"nll/{edge_key}", nll_w, batch_size=edge_bs, on_step=False, on_epoch=True, prog_bar=False)
 
         # ---- KL ----
         compute_kl_now, kl_weight = self._compute_kl_now(return_weight=True)
@@ -1101,7 +1110,7 @@ class LightningProxModel(L.LightningModule):
                 node_weights_dict=self.node_weights_dict,
             )
             self._log_metric("kl", batch_kl_div_loss, batch_size=bs_edges, on_step=False, on_epoch=True, prog_bar=False)
-            self._log_metric("kl_weighted", kl_weight * batch_kl_div_loss, on_step=False, on_epoch=True, prog_bar=False)
+            self._log_metric("kl_weighted", kl_weight * batch_kl_div_loss, batch_size=bs_edges, on_step=False, on_epoch=True, prog_bar=False)
 
         # ---- Herit Loss ----
         if self.herit_loss is not None:
@@ -1124,7 +1133,7 @@ class LightningProxModel(L.LightningModule):
         if compute_gene_align_now:
             gene_align_loss = self.gene_alignment_loss()
             self._log_metric("gene_align", gene_align_loss, batch_size=bs_edges, on_step=False, on_epoch=True, prog_bar=False)
-            self._log_metric("gene_align_weighted", gene_align_weight * gene_align_loss, on_step=False, on_epoch=True, prog_bar=False)
+            self._log_metric("gene_align_weighted", gene_align_weight * gene_align_loss, batch_size=bs_edges, on_step=False, on_epoch=True, prog_bar=False)
 
         # ---- OT loss ----
         compute_ot_cs_now, ot_cs_weight = self._compute_ot_cs_now(return_weight=True)
@@ -1134,7 +1143,7 @@ class LightningProxModel(L.LightningModule):
             t0 = time.time()
             ot_cs_loss = self.ot_alignment_loss(type="cs")
             self._log_metric("ot_cs_loss", ot_cs_loss, batch_size=bs_edges, on_step=False, on_epoch=True, prog_bar=False)
-            self._log_metric("ot_cs_weighted", ot_cs_weight * ot_cs_loss, on_step=False, on_epoch=True, prog_bar=False)
+            self._log_metric("ot_cs_weighted", ot_cs_weight * ot_cs_loss, batch_size=bs_edges, on_step=False, on_epoch=True, prog_bar=False)
         
         compute_ot_cb_now, ot_cb_weight = self._compute_ot_cb_now(return_weight=True)
         ot_cb_loss = torch.tensor(0.0, device=self.device)
@@ -1142,7 +1151,7 @@ class LightningProxModel(L.LightningModule):
             t0 = time.time()
             ot_cb_loss = self.ot_alignment_loss(type="cb")
             self._log_metric("ot_cb_loss", ot_cb_loss, batch_size=bs_edges, on_step=False, on_epoch=True, prog_bar=False)
-            self._log_metric("ot_cb_weighted", ot_cb_weight * ot_cb_loss, on_step=False, on_epoch=True, prog_bar=False)
+            self._log_metric("ot_cb_weighted", ot_cb_weight * ot_cb_loss, batch_size=bs_edges, on_step=False, on_epoch=True, prog_bar=False)
 
         loss = (
             batch_nll_loss + 
@@ -1280,7 +1289,7 @@ class LightningProxModel(L.LightningModule):
         self.local_step = 0
         t0 = time.time()
         self._compute_ot_plan()
-        self._log_perf("ot_plan", time.time() - t0, on_step=False)
+        # self._log_perf("ot_plan", time.time() - t0, on_step=False)
 
     def on_train_batch_start(self, batch, batch_idx):
         if hasattr(self, "t"):
@@ -1333,6 +1342,7 @@ class LightningProxModel(L.LightningModule):
         all_params = list(self.parameters())
         encoder_params = list(self.encoder.parameters())
         aux_params = list(self.aux_params.parameters())
+        assert len(encoder_params) + len(aux_params) == len(all_params), "Parameters other than encoder and aux_params exist in the model" # sanity check
 
         optimizer = torch.optim.Adam(
             # currently there are only encoder and aux parameters, no decoder parameters
@@ -1342,8 +1352,8 @@ class LightningProxModel(L.LightningModule):
                     "params": aux_params,
                     "lr": self.learning_rate * 0.1,
                 },  # 10x smaller LR for aux params
-            ]
-            # [{"params": all_params, "lr": self.learning_rate}]
+            ] if self.use_aux else
+            [{"params": encoder_params, "lr": self.learning_rate}]
         )
 
         scheduler = ReduceLROnPlateau(
