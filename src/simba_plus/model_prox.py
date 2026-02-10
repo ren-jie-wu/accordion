@@ -701,6 +701,8 @@ class LightningProxModel(L.LightningModule):
             )
         loss_dict = {}
         metric_dict = {}
+        fold_tensor = torch.tensor(self.num_neg_samples_fold, device=self.device)
+        weight_tensor = torch.tensor(1.0 / (1.0 + self.num_neg_samples_fold), device=self.device)
         for edge_type, pos_dist in pos_dist_dict.items():
             src_type, _, dst_type = edge_type
             pos_edge_weights = pos_edge_weight_dict[edge_type]
@@ -712,8 +714,7 @@ class LightningProxModel(L.LightningModule):
                     neg_dist.event_shape, device=self.device
                 )
                 neg_loss = -neg_dist.log_prob(neg_edge_weights).mean()
-                loss_dict[edge_type] += neg_loss
-                loss_dict[edge_type] *= torch.tensor(1.0 / (1.0 + self.num_neg_samples_fold), device=self.device)
+                loss_dict[edge_type] = (loss_dict[edge_type] + neg_loss * fold_tensor) * weight_tensor
 
         return loss_dict, neg_edge_index_dict, metric_dict
 
@@ -741,7 +742,7 @@ class LightningProxModel(L.LightningModule):
             #     return 0
             if w is None:
                 return x.mean()
-            return (x * w).mean()  # / w.long().sum()
+            return (x * w).sum() / (w.sum() + 1e-12)
 
         mu = self.__mu__ if mu is None else mu
         logstd = self.__logstd__ if logstd is None else logstd
