@@ -485,11 +485,14 @@ class LightningProxModel(L.LightningModule):
 
         self.num_neg_samples_fold = num_neg_samples_fold
         self.validation_step_outputs = []
+
+        self.use_aux = use_aux
+        self.use_aux_noise = use_aux_noise
         self.aux_params = AuxParams(data, edgetype_specific=edgetype_specific, 
                                     check_data=False,  # already checked above
-                                    use_noise=use_aux_noise    # DEBUG
+                                    use_noise=self.use_aux_noise    # DEBUG
         )
-        if not use_aux:
+        if not self.use_aux:
             self._freeze_aux_params()
 
         self.verbose = verbose
