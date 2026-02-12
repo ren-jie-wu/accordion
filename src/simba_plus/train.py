@@ -115,7 +115,7 @@ def run(
     load_checkpoint: bool = False,
     checkpoint_suffix: str = "",
     num_workers: int = 2,
-    kl_lambda: float = 0.05,
+    kl_lambda: float = 0.0001,
     kl_n_no: int = 0,
     kl_n_warmup: int = 10,
     hidden_dims: int = 50,
@@ -149,8 +149,9 @@ def run(
     ot_eps: float = 0.05,
     ot_iter: int = 50,
 
-    # DEBUG
-    resample: bool = False,
+    no_resample: bool = False,
+    no_aux: bool = False,
+    no_aux_noise: bool = False,
 ):
     """
     Train the model with the given parameters.
@@ -175,12 +176,15 @@ def run(
         early_stopping_steps (int, default=10): The number of epochs for early stopping patience.
         max_epochs (int, default=100): The number of max epochs for training.
         verbose (bool, default=False): If True, enables verbose logging.
-        
-        # other parameters
-        n_batch_sampling (int): Dummy parameter for now.
         kl_lambda (float): The weight of the KL divergence loss.
         kl_n_no (int): ... passed to LightningProxModel.
         kl_n_warmup (int): ... passed to LightningProxModel.
+        no_resample (bool): Disable resampling of the data.
+        no_aux (bool): Disable auxiliary parameters.
+        no_aux_noise (bool): Disable noise in auxiliary parameters.
+        
+        # other parameters
+        n_batch_sampling (int): Dummy parameter for now.
         edgetype_specific (bool): Whether to use different parameters for the same node type but different edge types. Passed to LightningProxModel.
         ldsc_res (pd.DataFrame): per-SNP LD score regression residuals from get_residual(). Used to promote peak loading explaining GWAS residual.
         
@@ -270,7 +274,7 @@ def run(
         num_workers=num_workers,
         negative_sampling_fold=0 if batch_negative else negative_sampling_fold,
         logger=logger,
-        resample=resample,
+        resample=(not no_resample),
     )
 
     # calculate some model parameters
@@ -354,6 +358,9 @@ def run(
         ot_cb_k=ot_cb_k,
         ot_eps=ot_eps,
         ot_iter=ot_iter,
+
+        use_aux=(not no_aux),
+        use_aux_noise=(not no_aux_noise),
     ).to(device)
 
     def train(
@@ -519,53 +526,53 @@ def save_files(
         map_location="cpu",
     )
     
-    # Save the scale and bias of the peak/gene and cell
-    if "peak" in model.encoder.__mu_dict__:
-        np.save(
-            f"{run_id}.checkpoints/peak_logscale.npy",
-            model.aux_params.logscale_dict["peak__cell_has_accessible_peak"]
-            .detach()
-            .numpy(),
-        )
-        np.save(
-            f"{run_id}.checkpoints/peak_bias.npy",
-            model.aux_params.bias_dict["peak__cell_has_accessible_peak"]
-            .detach()
-            .numpy(),
-        )
-        np.save(
-            f"{run_id}.checkpoints/cell_peak_logscale.npy",
-            model.aux_params.logscale_dict["cell__cell_has_accessible_peak"]
-            .detach()
-            .numpy(),
-        )
-        np.save(
-            f"{run_id}.checkpoints/cell_peak_bias.npy",
-            model.aux_params.bias_dict["cell__cell_has_accessible_peak"]
-            .detach()
-            .numpy(),
-        )
-    if "gene" in model.encoder.__mu_dict__:
-        np.save(
-            f"{run_id}.checkpoints/gene_logscale.npy",
-            model.aux_params.logscale_dict["gene__cell_expresses_gene"]
-            .detach()
-            .numpy(),
-        )
-        np.save(
-            f"{run_id}.checkpoints/gene_bias.npy",
-            model.aux_params.bias_dict["gene__cell_expresses_gene"].detach().numpy(),
-        )
-        np.save(
-            f"{run_id}.checkpoints/cell_gene_logscale.npy",
-            model.aux_params.logscale_dict["cell__cell_expresses_gene"]
-            .detach()
-            .numpy(),
-        )
-        np.save(
-            f"{run_id}.checkpoints/cell_gene_bias.npy",
-            model.aux_params.bias_dict["cell__cell_expresses_gene"].detach().numpy(),
-        )
+    # # Save the scale and bias of the peak/gene and cell
+    # if "peak" in model.encoder.__mu_dict__:
+    #     np.save(
+    #         f"{run_id}.checkpoints/peak_logscale.npy",
+    #         model.aux_params.logscale_dict["peak__cell_has_accessible_peak"]
+    #         .detach()
+    #         .numpy(),
+    #     )
+    #     np.save(
+    #         f"{run_id}.checkpoints/peak_bias.npy",
+    #         model.aux_params.bias_dict["peak__cell_has_accessible_peak"]
+    #         .detach()
+    #         .numpy(),
+    #     )
+    #     np.save(
+    #         f"{run_id}.checkpoints/cell_peak_logscale.npy",
+    #         model.aux_params.logscale_dict["cell__cell_has_accessible_peak"]
+    #         .detach()
+    #         .numpy(),
+    #     )
+    #     np.save(
+    #         f"{run_id}.checkpoints/cell_peak_bias.npy",
+    #         model.aux_params.bias_dict["cell__cell_has_accessible_peak"]
+    #         .detach()
+    #         .numpy(),
+    #     )
+    # if "gene" in model.encoder.__mu_dict__:
+    #     np.save(
+    #         f"{run_id}.checkpoints/gene_logscale.npy",
+    #         model.aux_params.logscale_dict["gene__cell_expresses_gene"]
+    #         .detach()
+    #         .numpy(),
+    #     )
+    #     np.save(
+    #         f"{run_id}.checkpoints/gene_bias.npy",
+    #         model.aux_params.bias_dict["gene__cell_expresses_gene"].detach().numpy(),
+    #     )
+    #     np.save(
+    #         f"{run_id}.checkpoints/cell_gene_logscale.npy",
+    #         model.aux_params.logscale_dict["cell__cell_expresses_gene"]
+    #         .detach()
+    #         .numpy(),
+    #     )
+    #     np.save(
+    #         f"{run_id}.checkpoints/cell_gene_bias.npy",
+    #         model.aux_params.bias_dict["cell__cell_expresses_gene"].detach().numpy(),
+    #     )
     
     # Save the cell, peak, and gene embedding adata and do umap
     cell_x = model.encoder.__mu_dict__["cell"].detach().cpu()
@@ -643,7 +650,7 @@ def main(args):
         kwargs["ldsc_res"] = residuals
 
     last_model_path, logger = run(**kwargs)
-    run_eval(args, last_model_path, logger)
+    # run_eval(args, last_model_path, logger)
 
 
 def add_argument(parser):
@@ -672,7 +679,7 @@ def add_argument(parser):
     parser.add_argument(
         "--batch-negative",
         action="store_true",
-        help="Batch size (number of edges) per DataLoader batch",
+        help="To do negative sampling in each batch or upon dataloader construction. Default is false, i.e., upon dataloader construction.",
     )
     parser.add_argument(
         "--output-dir",
@@ -753,6 +760,21 @@ def add_argument(parser):
         "--no-wandb",
         action="store_true",
         help="Disable Weights & Biases logging (recommended for CI/tests).",
+    )
+    parser.add_argument(
+        "--no-resample",
+        action="store_true",
+        help="Disable resampling of the data",
+    )
+    parser.add_argument(
+        "--no-aux",
+        action="store_true",
+        help="Disable auxiliary parameters",
+    )
+    parser.add_argument(
+        "--no-aux-noise",
+        action="store_true",
+        help="Disable noise in auxiliary parameters",
     )
     # kl divergence related parameters
     parser.add_argument(

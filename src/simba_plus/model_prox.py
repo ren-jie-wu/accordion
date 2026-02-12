@@ -424,7 +424,7 @@ class LightningProxModel(L.LightningModule):
 
         # DEBUG
         use_aux: bool = True,
-        use_aux_noise: bool = False,
+        use_aux_noise: bool = True,
     ):
         super().__init__()
         if device is not None:

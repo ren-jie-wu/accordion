@@ -12,9 +12,9 @@ See the original SIMBA+ code [here](https://github.com/pinellolab/simba-plus).
 
 ## Installation
 ```
-git clone git@github.com:ren-jie-wu/accordion.git
+git clone https://github.com/ren-jie-wu/accordion.git
 cd accordion
-pip install .
+pip install -e .
 ```
 
 ## Usage
