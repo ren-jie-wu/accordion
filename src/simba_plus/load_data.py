@@ -356,7 +356,7 @@ def add_argument(parser):
 
 def main(args):
     out_dir = os.path.dirname(args.out_path)
-    if not os.path.exists(out_dir):
+    if out_dir and not os.path.exists(out_dir):
         os.makedirs(out_dir, exist_ok=True)
     
     gene_paths = args.gene_adata
@@ -395,3 +395,4 @@ if __name__ == "__main__":
     parser = add_argument(parser)
     args = parser.parse_args()
     main(args)
+
