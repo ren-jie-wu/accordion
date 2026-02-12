@@ -40,6 +40,7 @@ usage: simba+ train [-h] [--adata-CG ADATA_CG] [--adata-CP ADATA_CP]
                     [--get-adata] [--num-workers NUM_WORKERS]
                     [--early-stopping-steps EARLY_STOPPING_STEPS]
                     [--max-epochs MAX_EPOCHS] [--verbose] [--no-wandb]
+                    [--no-resample] [--no-aux] [--no-aux-noise]
                     [--kl-lambda KL_LAMBDA] [--kl-n-no KL_N_NO]
                     [--kl-n-warmup KL_N_WARMUP]
                     [--gene-align-lambda GENE_ALIGN_LAMBDA]
@@ -67,7 +68,9 @@ options:
                         .obs attribute if not provided.
   --batch-size BATCH_SIZE
                         Batch size (number of edges) per DataLoader batch
-  --batch-negative      Batch size (number of edges) per DataLoader batch
+  --batch-negative      To do negative sampling in each batch or upon
+                        dataloader construction. Default is false, i.e., upon
+                        dataloader construction.
   --output-dir OUTPUT_DIR
                         Top-level output directory where run artifacts will be
                         stored
@@ -99,6 +102,9 @@ options:
   --verbose             If set, enables verbose logging
   --no-wandb            Disable Weights & Biases logging (recommended for
                         CI/tests).
+  --no-resample         Disable resampling of the data
+  --no-aux              Disable auxiliary parameters
+  --no-aux-noise        Disable noise in auxiliary parameters
   --kl-lambda KL_LAMBDA
                         Weight of the KL divergence loss
   --kl-n-no KL_N_NO     Number of epochs to wait before starting KL divergence
